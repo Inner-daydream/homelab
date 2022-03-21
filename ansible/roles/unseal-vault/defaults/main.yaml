@@ -1,0 +1,2 @@
+SHARDS_DIR: ~/.secrets/vault/shards
+VAULT_ADDR: ""

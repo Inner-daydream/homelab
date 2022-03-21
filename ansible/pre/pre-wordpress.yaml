@@ -1,0 +1,29 @@
+- name : Packer wordpress setup
+  hosts: all
+  vars_files: ../secrets/secrets.yaml
+
+  roles:
+    - role: common
+      USER_PASSWORD_HASH: '{{ WORDPRESS_PASSWORD_HASH }}'
+      PKG:
+        - unzip
+        - php7.0
+        - apache2
+        - libapache2-mod-php7.0
+
+    - role: consul
+    - role: wordpress
+    - role: dnsmasq
+    - role: vault-agent
+  tasks:
+    - name: find the temporary inventory file
+      run_once: yes
+      find:
+        paths:
+          - '~/gitlab.iscio.com/siocorp/ansible/inventory'
+        patterns:
+          - '^packer-provisioner-ansible\d+'
+        use_regex: yes
+      delegate_to: localhost
+      register: packer_inventory
+    

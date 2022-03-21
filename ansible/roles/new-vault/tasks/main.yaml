@@ -1,0 +1,225 @@
+- name: delete vault secret directory on the ansible worker
+  run_once: yes
+  file:
+    state: absent
+    path: '{{ VAULT_SECRETS_DIR }}'
+  delegate_to: localhost
+
+- name: create vault secret directories on the ansible worker
+  run_once: yes
+  file:
+    path: '{{ item }}'
+    state: directory
+  with_items: 
+    - '{{ VAULT_SECRETS_DIR }}/shards'
+    - '{{ VAULT_SECRETS_DIR }}/tokens'
+  delegate_to: localhost
+
+- name: initialize vault
+  run_once: yes
+  command: vault operator init -key-shares=5 -key-threshold=3 -format json
+  register: vault_init_results
+  environment:
+    VAULT_ADDR: http://127.0.0.1:8200
+
+- name: parse output of vault init
+  run_once: yes
+  set_fact: 
+    vault_init_parsed: "{{ vault_init_results.stdout | from_json }}"
+
+- name: store  key shards to files
+  run_once: yes
+  copy:
+    dest: "{{ VAULT_SECRETS_DIR }}/shards/key_shard_{{ item.0 }}"
+    content: "{{ item.1 }}"
+  with_indexed_items: "{{ vault_init_parsed.unseal_keys_hex }}"
+  delegate_to: localhost
+
+- name: store root token to file
+  run_once: yes
+  copy:
+    content: "{{ vault_init_parsed.root_token }}"
+    dest: '{{ VAULT_SECRETS_DIR }}/tokens/root-token'
+  delegate_to: localhost
+
+- name: fetch root token
+  run_once: yes
+  command: 'cat {{ VAULT_SECRETS_DIR }}/tokens/root-token'
+  register: root_token
+  delegate_to: localhost
+
+- name: unseal vault
+  include_role:
+    name: unseal-vault
+  vars: 
+    VAULT_ADDR: http://127.0.0.1:8200
+
+- name: enable the pki secrets engine at the pki path
+  run_once: yes
+  command: vault secrets enable pki
+  environment:
+    VAULT_ADDR: http://127.0.0.1:8200
+    VAULT_TOKEN: '{{ root_token.stdout }}'
+  retries: 20
+  delay: 10
+  register: result
+  until: result.rc == 0
+
+
+- name: tune the pki secrets engine to issue certificates with a maximum time-to-live (TTL) of 87600 hours
+  run_once: yes
+  command: vault secrets tune -max-lease-ttl=87600h pki
+  environment:
+    VAULT_ADDR: http://127.0.0.1:8200
+    VAULT_TOKEN: '{{ root_token.stdout }}'
+
+- name: generate the root certificate and save the certificate in CA_cert.crt 
+  run_once: yes
+  shell: 'vault write -field=certificate pki/root/generate/internal common_name="lucasquitman.fr" ttl=87600h > CA_cert.crt'
+  environment:
+    VAULT_ADDR: http://127.0.0.1:8200
+    VAULT_TOKEN: '{{ root_token.stdout }}'
+
+- name: configure the CA and CRL URLs
+  run_once: yes
+  command: vault write pki/config/urls issuing_certificates="http://127.0.0.1:8200/v1/pki/ca" crl_distribution_points="http://127.0.0.1:8200/v1/pki/crl"
+  environment:
+    VAULT_ADDR: http://127.0.0.1:8200
+    VAULT_TOKEN: '{{ root_token.stdout }}'
+
+- name: enable the pki secrets engine at the pki_int path
+  run_once: yes
+  command: vault secrets enable -path=pki_int pki
+  environment:
+    VAULT_ADDR: http://127.0.0.1:8200
+    VAULT_TOKEN: '{{ root_token.stdout }}'
+
+- name: tune the pki_int secrets engine to issue certificates with a maximum time-to-live (TTL) of 43800 hours
+  run_once: yes
+  command: vault secrets tune -max-lease-ttl=43800h pki_int
+  environment:
+    VAULT_ADDR: http://127.0.0.1:8200
+    VAULT_TOKEN: '{{ root_token.stdout }}'
+
+- name: generate an intermediate and save the CSR as pki_intermediate.csr
+  run_once: yes
+  shell: 'vault write -format=json pki_int/intermediate/generate/internal common_name="lucasquitman.fr Intermediate Authority" | jq -r .data.csr > pki_intermediate.csr'
+  environment:
+    VAULT_ADDR: http://127.0.0.1:8200
+    VAULT_TOKEN: '{{ root_token.stdout }}'
+
+- name: sign the intermediate certificate with the root CA private key, and save the generated certificate as intermediate.cert.pem
+  run_once: yes
+  shell: 'vault write -format=json pki/root/sign-intermediate csr=@pki_intermediate.csr format=pem_bundle ttl="43800h" | jq -r .data.certificate > intermediate.cert.pem'
+  environment:
+    VAULT_ADDR: http://127.0.0.1:8200
+    VAULT_TOKEN: '{{ root_token.stdout }}'
+
+- name: once the CSR is signed and the root CA returns a certificate, import it back to vault
+  run_once: yes
+  command: vault write pki_int/intermediate/set-signed certificate=@intermediate.cert.pem
+  environment:
+    VAULT_ADDR: http://127.0.0.1:8200
+    VAULT_TOKEN: '{{ root_token.stdout }}'
+
+- name: create a role named dot-consul which allows subdomains
+  run_once: yes
+  command: vault write pki_int/roles/dot-consul allowed_domains="node.homelab.consul","vault.service.consul" allow_subdomains=true max_ttl="17520h"
+  environment:
+    VAULT_ADDR: http://127.0.0.1:8200
+    VAULT_TOKEN: '{{ root_token.stdout }}'
+
+- name: create a role named nomad-cluster which allows subdomains
+  run_once: yes
+  command: vault write pki_int/roles/nomad-cluster allowed_domains=global.nomad allow_subdomains=true max_ttl=86400s require_cn=false generate_lease=true
+  environment:
+    VAULT_ADDR: http://127.0.0.1:8200
+    VAULT_TOKEN: '{{ root_token.stdout }}'
+
+- name: create a role named lucasquitman-dot-fr which allows subdomains
+  run_once: yes
+  command: vault write pki_int/roles/lucasquitman-dot-fr allowed_domains="lucasquitman.fr" allow_subdomains=true max_ttl=86400s  generate_lease=true
+  environment:
+    VAULT_ADDR: http://127.0.0.1:8200
+    VAULT_TOKEN: '{{ root_token.stdout }}'
+
+- name: create a policy file named lucasquitman-dot-fr-policy.hcl and assign in to lucasquitman-dot-fr
+  become: yes
+  run_once: yes
+  copy:
+    dest: /etc/vault.d/lucasquitman-dot-fr-policy.hcl
+    content: |
+      path "pki_int/issue/lucasquitman-dot-fr" {
+        capabilities = ["update"]
+      }
+
+- name: create a policy file named tls-policy.hcl and assign it to nomad-cluster
+  run_once: yes
+  become: yes
+  copy:
+    dest: /etc/vault.d/tls-policy.hcl
+    content: |
+      path "pki_int/issue/nomad-cluster" {
+        capabilities = ["update"]
+      }
+
+- name: upload the tls policy to vault
+  command: vault policy write tls-policy /etc/vault.d/tls-policy.hcl
+  environment:
+    VAULT_ADDR: http://127.0.0.1:8200
+    VAULT_TOKEN: '{{ root_token.stdout }}'
+
+- name: upload the lucasquitman-dot-fr policy to vault
+  command: vault policy write lucasquitman-dot-fr-policy /etc/vault.d/lucasquitman-dot-fr-policy.hcl
+  environment:
+    VAULT_ADDR: http://127.0.0.1:8200
+    VAULT_TOKEN: '{{ root_token.stdout }}'
+
+- name: create a token based on tls-policy
+  run_once: yes
+  command: vault token create -policy="tls-policy" -period=24h -orphan
+  register: tls_policy_token
+  environment:
+    VAULT_ADDR: http://127.0.0.1:8200
+    VAULT_TOKEN: '{{ root_token.stdout }}'
+
+- name: create a token based on lucasquitman-dot-fr-policy and tls policy
+  run_once: yes
+  command: vault token create -policy="lucasquitman-dot-fr-policy" -policy="tls-policy" -period=24h -orphan
+  register: nginx_token
+  environment:
+    VAULT_ADDR: http://127.0.0.1:8200
+    VAULT_TOKEN: '{{ root_token.stdout }}'
+
+- name: parse the tls policy token
+  run_once: yes
+  set_fact: 
+    tls_policy_token_parsed: '{{ tls_policy_token.stdout | regex_search("s\.[a-zA-Z0-9]{24}") }}'
+
+- name: parse the nginx-policy token
+  run_once: yes
+  set_fact: 
+    nginx_token_parsed: '{{ nginx_token.stdout | regex_search("s\.[a-zA-Z0-9]{24}") }}'
+
+- name: store the tls policy token token on a file on the ansible worker
+  run_once: yes
+  copy:
+    content: "{{ tls_policy_token_parsed }}"
+    dest: '{{ VAULT_SECRETS_DIR }}/tokens/tls-policy-token'
+  delegate_to: localhost
+
+- name: store the nginx policy token on a file on the ansible worker
+  run_once: yes
+  copy:
+    content: "{{ nginx_token_parsed }}"
+    dest: '{{ VAULT_SECRETS_DIR }}/tokens/nginx-token'
+  delegate_to: localhost
+
+- name: delete secrets from vault in home directory
+  file:
+    state: absent
+    path: '~/{{ item }}'
+  with_items: 
+    - CA_cert.crt
+    - intermediate.cert.pem
+    - pki_intermediate.csr

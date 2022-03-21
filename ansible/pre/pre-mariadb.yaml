@@ -1,0 +1,25 @@
+- name : Packer Mariadb setup
+  hosts: all
+  vars_files: ../secrets/secrets.yaml
+
+  roles:
+    - role: common
+      USER_PASSWORD_HASH: '{{ MARIADB_PASSWORD_HASH }}'
+      PKG:
+        - mariadb-server
+
+    - role: consul
+    - role: mariadb
+
+  tasks:
+    - name: find the temporary inventory file
+      run_once: yes
+      find:
+        paths:
+          - '~/gitlab.iscio.com/siocorp/ansible/inventory'
+        patterns:
+          - '^packer-provisioner-ansible\d+'
+        use_regex: yes
+      delegate_to: localhost
+      register: packer_inventory
+    

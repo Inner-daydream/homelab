@@ -1,0 +1,53 @@
+{
+  "variables": {
+    "password": ""
+},
+    "builders": [
+      {
+        "type": "qemu",
+  
+        "memory": 2048,
+        "name": "master-base",
+        "iso_urls": ["/srv/packer/output/ubuntu-golden/golden_ubuntu-srv"],
+        "iso_checksum": "file:/srv/packer/output/ubuntu-golden/checksum",
+        "output_directory": "output/baking/master",
+        "format": "raw",
+        "vm_name": "master-base",
+        "headless": "true",
+        "shutdown_command": "echo \"{{user `password`}}\" | sudo -S shutdown -P now",
+        "ssh_username": "sibelius",
+        "ssh_private_key_file": "/home/sibelius/.ssh/github",
+        "disk_image": "true",
+        "ssh_timeout": "20m",
+        "ssh_handshake_attempts": "120"
+      }
+    ],
+  
+    "provisioners": [
+      {
+        "type": "ansible",
+        "playbook_file": "/srv/ansible/kube-master.yaml",
+        "use_proxy": false,
+        "user": "sibelius",
+        "ssh_authorized_key_file": "/home/sibelius/.ssh/github",
+        "extra_arguments": [
+          "-e",
+          "'ansible_python_interpreter=/usr/bin/python3'",
+          "-vvv",
+          "--extra-vars",
+          "ansible_become_password='PACKER'"
+        ]
+      }
+    ],
+    "post-processors": [
+      {
+        "type": "shell-local",
+        "inline": [
+          "rm -rf /srv/packer/output/master/master-base",
+          "mv /srv/packer/output/baking/master/* /srv/packer/output/master/",
+          "rm -rf /srv/packer/output/baking/master"
+        ]
+      }
+    ]
+  }
+  

@@ -1,0 +1,64 @@
+- name : Packer consul setup
+  hosts: all
+  vars_files: ../secrets/secrets.yaml
+
+  roles:
+    - role: common
+      USER_PASSWORD_HASH: $6$nAnpp/FS$ouG.LgLyuEgToCRCm4Djo/HMc/./2aAkSGrKRjHyz2IYUVpQ7rTHh407tJhCAC4HhWXvyKa4eHcEYLg7Qap6c1
+      PKG:
+        - nginx
+        - unzip
+  tasks:
+    - name: find the temporary inventory file
+      run_once: yes
+      find:
+        paths:
+          - '~/gitlab.iscio.com/siocorp/ansible/inventory'
+        patterns:
+          - '^packer-provisioner-ansible\d+'
+        use_regex: yes
+      delegate_to: localhost
+      register: packer_inventory
+        
+    - name: merge the consul inventory with the packer inventory
+      run_once: yes
+      shell:
+        cmd: 'cat consul-inventory.cfg >> {{ packer_inventory["files"][0].path }}'
+        chdir: ~/gitlab.iscio.com/siocorp/ansible/inventory/
+      delegate_to: localhost
+
+    - name: refresh the inventory file
+      run_once: yes
+      meta: refresh_inventory
+
+    - name: update password used
+      set_fact: ansible_become_pass='{{ nginx_password }}'
+      
+    - name: install consul
+      include_role:
+        name: consul
+
+    - name: start the consul service
+      become: yes
+      service:
+        name: consul
+        state: started
+
+    - name: install consul-template
+      include_role: 
+        name: consul-template
+
+    - name: install dnsmasq
+      include_role:
+        name:  dnsmasq
+
+    - name: install nginx
+      include_role:
+        name: nginx
+    
+    - name: enable and start consul template
+      become: yes
+      systemd:
+        name: consul-template
+        enabled: yes
+        state: started

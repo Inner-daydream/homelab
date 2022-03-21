@@ -1,0 +1,286 @@
+- name: Add Docker's official apt key.
+  become: yes
+  apt_key:
+    url: https://download.docker.com/linux/ubuntu/gpg
+    id: 9DC858229FC7DD38854AE2D88D81803C0EBFCD88
+    state: present
+  ignore_errors: true
+
+- name: Add Docker stable repository.
+  become: yes
+  apt_repository:
+    repo: "deb [arch=amd64] https://download.docker.com/linux/{{ ansible_distribution|lower }} {{ ansible_distribution_release }} stable"
+    state: present
+    update_cache: yes
+
+- name: install  docker pkg
+  become: yes
+  apt:
+    pkg:
+    - docker-ce
+    - docker-ce-cli
+    - containerd.io
+
+- name: open the required ports for  nomad
+  become: yes
+  ufw:
+    rule: allow
+    direction: in
+    src: 192.168.1.0/24
+    port: ' {{ item.port }}'
+    proto: '{{ item.proto }}'
+    comment: '{{ item.comment }}'
+  with_items:
+    - port: '4646'
+      proto: tcp
+      comment: nomad http api
+    - port: '4647'
+      proto: tcp
+      comment: nomad RPC
+    - port: '4648'
+      proto: any
+      comment: nomad Serf WAN
+
+- name: download nomad binary zip
+  become: yes
+  get_url:
+    url: "{{ NOMAD_URL }}/{{ NOMAD_VERSION }}/nomad_{{ NOMAD_VERSION }}_linux_amd64.zip"
+    dest: /tmp
+
+- name: unzip nomad archive
+  become: yes
+  unarchive:
+    src: /tmp/nomad_{{ NOMAD_VERSION }}_linux_amd64.zip
+    dest: /usr/bin/
+    owner: root
+    group: root
+    remote_src: yes
+
+- name: Create a unique, non-privileged system user in the docker group to run Nomad.
+  become: yes
+  user:
+    name: nomad
+    home: /etc/nomad.d
+    shell: /bin/false
+    groups:
+      - docker
+    system: yes
+
+- name: install autocompletion
+  command: nomad -autocomplete-install
+
+- name: set up autocompletion 
+  shell: complete -C /usr/bin/nomad nomad
+  args:
+    executable: /bin/bash
+
+- name: Create nomad data directory
+  become: yes
+  file:
+    path: /opt/nomad/templates
+    state: directory
+    owner: nomad
+    group: nomad
+    recurse: yes
+
+- name: create the systemd config file
+  become: yes
+  copy:
+    dest: /etc/systemd/system/nomad.service
+    content: |
+      [Unit]
+      Description=Nomad
+      Documentation=https://www.nomadproject.io/docs/
+      Wants=network-online.target
+      After=network-online.target
+
+      # When using Nomad with Consul it is not necessary to start Consul first. These
+      # lines start Consul before Nomad as an optimization to avoid Nomad logging
+      # that Consul is unavailable at startup.
+      #Wants=consul.service
+      #After=consul.service
+
+      [Service]
+      ExecReload=/bin/kill -HUP $MAINPID
+      ExecStart=/usr/bin/nomad agent -config /etc/nomad.d
+      KillMode=process
+      KillSignal=SIGINT
+      LimitNOFILE=65536
+      LimitNPROC=infinity
+      Restart=on-failure
+      RestartSec=2
+
+      ## Configure unit start rate limiting. Units which are started more than
+      ## *burst* times within an *interval* time span are not permitted to start any
+      ## more. Use `StartLimitIntervalSec` or `StartLimitInterval` (depending on
+      ## systemd version) to configure the checking interval and `StartLimitBurst`
+      ## to configure how many starts per interval are allowed. The values in the
+      ## commented lines are defaults.
+
+      # StartLimitBurst = 5
+
+      ## StartLimitIntervalSec is used for systemd versions >= 230
+      # StartLimitIntervalSec = 10s
+
+      ## StartLimitInterval is used for systemd versions < 230
+      # StartLimitInterval = 10s
+
+      TasksMax=infinity
+      OOMScoreAdjust=-1000
+
+      [Install]
+      WantedBy=multi-user.target
+
+
+- name: Create the nomad agent config file
+  become: yes
+  file:
+    path: /etc/nomad.d/nomad.hcl
+    owner: nomad
+    group: nomad
+    state: touch
+    mode: 0640
+
+- name: populate the nomad agent config file
+  become: yes
+  blockinfile:
+    path: /etc/nomad.d/nomad.hcl
+    state: present
+    block: |
+      datacenter = "Homelab"
+      data_dir = "/opt/nomad"
+
+- name: Create the nomad server config file
+  become: yes
+  file:
+    path: /etc/nomad.d/server.hcl
+    owner: nomad
+    group: nomad
+    state: touch
+    mode: 0640
+
+- name: populate the nomad server config file
+  become: yes
+  blockinfile:
+    path: /etc/nomad.d/server.hcl
+    state: present
+    block: |
+      server {
+        enabled = true
+        bootstrap_expect = 3
+      }
+- name: create the host volume config for persistent storage
+  when: PERSISTENT_STORAGE
+  become: yes
+  blockinfile:
+    path: /etc/nomad.d/nomad.hcl
+    state: present
+    marker_begin: "BEGIN3"
+    marker_end: "END3"
+    marker: "# {mark} THIRD ANSIBLE MANAGED BLOCK"
+    block: |
+      client {
+        host_volume "{{ PERSISTENT_STORAGE_NAME }}" {
+          path      = "{{ PERSISTENT_STORAGE_PATH }}"
+          read_only = false
+        }
+      }
+    
+- name: add the agent certificate template
+  become: yes
+  copy:
+    src: agent.crt.tpl
+    dest: /opt/nomad/templates/agent.crt.tpl
+    group: nomad
+    owner: nomad
+
+- name: add the  agent key template
+  become: yes
+  copy:
+    src: agent.key.tpl
+    dest: /opt/nomad/templates/agent.key.tpl
+    group: nomad
+    owner: nomad
+
+- name: add the CA template
+  become: yes
+  copy:
+    src: ca.crt.tpl
+    dest: /opt/nomad/templates/ca.crt.tpl
+    group: nomad
+    owner: nomad
+    
+- name: add the cli certificate template
+  become: yes
+  copy:
+    src: cli.crt.tpl
+    dest: /opt/nomad/templates/cli.crt.tpl
+    group: nomad
+    owner: nomad
+
+- name: add the cli key template
+  become: yes
+  copy:
+    src: cli.key.tpl
+    dest: /opt/nomad/templates/cli.key.tpl
+    group: nomad
+    owner: nomad
+
+- name: add the consul template config
+  become: yes
+  copy:
+    src: consul-template.hcl
+    dest: /etc/consul-template.d/templates/consul-template.hcl
+    group: consul-template
+    owner: consul-template
+  
+- name: fetch token
+  command: cat ~/.secrets/vault/tokens/tls-policy-token
+  delegate_to: localhost
+  register: tls_policy_token
+
+- name: add correct consul template token
+  become: yes
+  lineinfile:
+    path: /etc/consul-template.d/templates/consul-template.hcl
+    regexp: '^\s+token\s+=\s+"(TOKEN_REGEX)"'
+    line: '  token = "{{  tls_policy_token.stdout }}"'
+
+- name: create the vault dir for trusted ca
+  become: yes
+  file:
+    state: directory
+    path: /usr/share/ca-certificates/vault
+
+- name: copy the cert to the trusted ca dir
+  become: yes
+  copy:
+    src: ~/.secrets/ca/vault.crt
+    dest: /usr/share/ca-certificates/vault/vault.crt
+
+- name: update the trusted ca conf file
+  become: yes
+  lineinfile:
+    path: /etc/ca-certificates.conf
+    line: vault/vault.crt
+
+- name: update the trusted ca
+  become: yes
+  command: update-ca-certificates
+
+- name: generate nomad gossip key
+  command: nomad operator keygen
+  register: nomad_gossip_key
+
+- name: add nomad gossip key to the nomad server config file
+  become: yes
+  lineinfile:
+    path: /etc/nomad.d/server.hcl
+    insertafter: '^server\s*\{'
+    line: '  encrypt = "{{ nomad_gossip_key.stdout }}"'
+    
+- name: enable the nomad service
+  become: yes
+  systemd:
+    name: nomad
+    enabled: yes

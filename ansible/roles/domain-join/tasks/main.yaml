@@ -1,0 +1,45 @@
+- name: adding required pkgs
+  when: PKG is defined
+  become: yes
+  apt: 
+    pkg: 
+      - ntp
+      - sssd
+      - realmd
+      - oddjob
+      - libnss-sss
+      - libpam-sss
+      - sssd 
+      - sssd-tools
+      - adcli
+      - samba-common-bin
+      - oddjob
+      - oddjob-mkhomedir
+      - packagekit
+ 
+- name: add the DC names in /etc/hosts
+  become: yes
+  lineinfile:
+    path: /etc/hosts
+    line: '{{ item }}'
+    loop: '{{ DOMAIN_CONTROLLERS }}'
+
+- name: set up ntp
+  become: yes
+  lineinfile:
+    path: /etc/ntp.conf
+    line: server {{ item | regex_search("(dc\d+\.\w+\.\w+)") }}
+  loop: '{{ DOMAIN_CONTROLLERS }}'
+
+- name: change maxdist
+  become: yes
+  lineinfile:
+    path: /etc/ntp.conf
+    line: tos maxdist 20
+
+- name: restart & enable ntp
+  become: yes
+  systemd:
+    name: ntp
+    state: restarted
+    enabled: yes 

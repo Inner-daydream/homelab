@@ -1,0 +1,52 @@
+- name: Prepare the system
+  hosts: all
+  gather_facts: no
+  become: yes
+  vars_files: ./inventory/secrets.yaml
+  roles:
+    - role: robertdebock.bootstrap
+    - role: robertdebock.common
+    - role: robertdebock.update
+  tasks:
+
+  - name: adding required pkg
+    apt: 
+      pkg:
+      - openjdk-11-jre-headless
+
+  - name : change user password
+    user: 
+      name: sibelius
+      password: '$6$XdPcE.vzbx$dRjLEd.Rcvu2x7bKH7xVZDX8G2ZUR9VgnaOsf3wUe1KC6v/m5Vu96/DvyoiEkE4DmcUog/pk/SrkhEGHKBeEj.'
+
+  - name: Update password used
+    set_fact: ansible_become_pass='{{ rundeck_password }}'
+
+  - name: rundeck fw rules
+    ufw:
+      rule: allow
+      direction: in
+      port: '{{ item.port }}'
+      proto: tcp
+      comment: '{{ item.comment }}'
+    with_items:
+      - port: 4440
+        comment: http
+      - port: 4443
+        comment: https
+
+- name: update & install
+  hosts: all
+  become: yes
+  gather_facts: yes
+  vars_files: ./inventory/secrets.yaml
+  roles:
+    - role: robertdebock.rundeck
+      rundeck_address: "rundeck.lucasquitman.fr"
+      rundeck_users:
+        - username: sibelius
+          password: '{{ rundeck_password }}'
+          roles: "user,admin"
+        - username: user
+          password: '{{ rundeck_user }}'
+          roles: "user"

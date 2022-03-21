@@ -1,0 +1,27 @@
+- name: Download the binary from the wordpress website
+  uri:
+    url: http://wordpress.org/latest.tar.gz
+    dest: /tmp/wordpress.tar.gz
+    mode: 0644
+    force: yes
+  
+- name: Extract file to /var/www/html
+  raw:
+    find: /tmp/wordpress.tar.gz
+    args: |
+      -type f -exec tar -xzf {} -C /var/www/html \;
+      -type d -exec chmod 755 {} \;
+      -type f -exec chmod 644 {} \;
+
+- name: Remove wp-config.php
+  file:
+    path: /var/www/html/wp-config.php
+    state: absent
+
+- name: transfer the config over to the server
+  src: wp-config.php
+    dest: /var/www/html/wp-config.php
+    owner: root
+    group: root
+    mode: 0644
+

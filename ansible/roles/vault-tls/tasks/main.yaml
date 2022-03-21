@@ -1,0 +1,86 @@
+- name: unseal vault
+  include_role:
+    name: unseal-vault
+  vars:
+    VAULT_ADDR: http://127.0.0.1:8200
+
+- name: fetch root token
+  run_once: yes
+  command: 'cat {{ VAULT_SECRETS_DIR }}/tokens/root-token'
+  register: root_token
+  delegate_to: localhost
+
+- name: create a certificate and private key to be used for vault tls config
+  shell: vault write -format=json pki_int/issue/dot-consul common_name="*.node.homelab.consul" alt_names="*.vault.service.consul" ttl="17520h" > cert.json
+  environment:
+    VAULT_ADDR: http://127.0.0.1:8200
+    VAULT_TOKEN: '{{ root_token.stdout }}'
+
+
+- name: filter the cert.json for the certificate and store it in vault.crt
+  shell: jq -r .data.certificate cert.json > vault.crt
+
+- name: filter the cert.json for the private key and store it in vault.key
+  shell: jq -r .data.private_key cert.json > vault.key
+
+- name: fetch vault.crt
+  run_once: yes
+  fetch:
+    src: ~/vault.crt
+    dest: ~/.secrets/ca/vault.crt
+    flat: yes
+    
+- name: move vault.key and vault.crt to the vault data dir
+  become: yes
+  command: mv '{{ item }}' /etc/vault.d/
+  with_items:
+    - vault.key
+    - vault.crt
+
+
+- name: create the vault dir for trusted ca
+  become: yes
+  file:
+    state: directory
+    path: /usr/share/ca-certificates/vault
+
+- name: copy the cert to the trusted ca dir
+  become: yes
+  copy:
+    remote_src: yes
+    src: /etc/vault.d/vault.crt
+    dest: /usr/share/ca-certificates/vault/vault.crt
+
+- name: update the trusted ca conf file
+  become: yes
+  lineinfile:
+    path: /etc/ca-certificates.conf
+    line: vault/vault.crt
+
+- name: update the trusted ca
+  become: yes
+  command: update-ca-certificates
+
+- name: delete secrets from vault home directory
+  file:
+    state: absent
+    path: '~/{{ item }}'
+  with_items: 
+    - cert.json
+
+- name: add the tls cert/key location in the vault config
+  become: yes
+  lineinfile:
+    path: /etc/vault.d/vault.hcl
+    insertafter: '\s*listener.*tcp.*{'
+    line: '{{ item }}'
+  with_items:
+    - '  tls_cert_file = "/etc/vault.d/vault.crt"'
+    - '  tls_key_file = "/etc/vault.d/vault.key"'
+
+- name: enable tls
+  become: yes
+  lineinfile:
+    path: /etc/vault.d/vault.hcl
+    regexp: '^\s{2}tls_disable\s*=\s*"true"$'
+    state: absent

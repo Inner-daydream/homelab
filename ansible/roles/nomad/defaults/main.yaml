@@ -1,0 +1,5 @@
+NOMAD_VERSION: "1.1.0"
+NOMAD_URL: https://releases.hashicorp.com/nomad
+PERSISTENT_STORAGE: yes
+PERSISTENT_STORAGE_PATH: /mnt/glusterfs
+PERSISTENT_STORAGE_NAME: glusterfs

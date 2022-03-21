@@ -1,0 +1,373 @@
+- name: set up consul baseline
+  vars_files: ./inventory/secrets.yaml
+  hosts: all
+  vars:
+    CONSUL_VERSION: "1.10.2"
+    CONSUL_URL: https://releases.hashicorp.com/consul
+  tasks:
+    - name: open the required ports for consul
+      become: yes
+      ufw:
+        rule: allow
+        direction: in
+        src: 192.168.1.0/24
+        port: ' {{ item.port }}'
+        proto: '{{ item.proto }}'
+        comment: '{{ item.comment }}'
+      with_items:
+        - port: '8600'
+          proto: any
+          comment: consul dns
+        - port: '8500'
+          proto: tcp
+          comment: consul http api
+        - port: '8501'
+          proto: any
+          comment: consul https api
+        - port: '8502'
+          proto: any
+          comment: consul gRPC api
+        - port: '8301'
+          proto: any
+          comment: consul Serf LAN
+        - port: '8302'
+          proto: any
+          comment: consul Serf WAN
+        - port: '8300'
+          proto: tcp
+          comment: consul server rpc address
+      
+    - name: Create local temp directory for the tasks
+      file:
+        path: /tmp/ansible
+        state: directory
+      delegate_to: "127.0.0.1"
+
+    - name : change user password
+      become: yes
+      user: 
+        name: sibelius
+        password: "$6$csiKkZjRX$pkS9lr6VSMuenG8tz5JTVpLhtFMSF1TBZfzigR1Vf6UvtWitXXdimbaSh0Bd13R/.0HE9Qt0nSRoBQCuYMXJZ."
+
+    - name: Update password used
+      set_fact: ansible_become_pass='{{ consul_password }}'
+
+    - name: update
+      become: yes
+      apt:
+        update_cache: yes
+
+    - name: upgrade
+      become: yes
+      apt:
+        upgrade: full
+
+    - name: adding required pkgs
+      become: yes
+      apt: 
+        pkg:
+        - unzip
+
+    - name: download consul binary zip
+      become: yes
+      get_url:
+        url: "{{ CONSUL_URL }}/{{ CONSUL_VERSION }}/consul_{{ CONSUL_VERSION }}_linux_amd64.zip"
+        dest: /tmp
+
+    - name: unzip consul archive
+      become: yes
+      unarchive:
+        src: /tmp/consul_{{ CONSUL_VERSION }}_linux_amd64.zip
+        dest: /usr/bin/
+        owner: root
+        group: root
+        remote_src: yes
+
+    - name: install autocompletion
+      command: consul -autocomplete-install
+    
+    - name: set up autocompletion 
+      shell: complete -C /usr/bin/consul consul
+      args:
+        executable: /bin/bash
+
+    - name: Create a unique, non-privileged system user to run Consul.
+      become: yes
+      user:
+        name: consul
+        home: /etc/consul.d
+        shell: /bin/false
+        system: yes
+      
+    - name: Create consul data directory
+      become: yes
+      file:
+        path: /opt/consul
+        state: directory
+        owner: consul
+        group: consul
+        recurse: yes
+
+- name: set up consul admin instance
+  hosts: consul0
+  tasks:
+    - name: create the encryption key
+      command: consul keygen
+      register: consul_key
+
+    - name: ensure consul secret directory is present on ansible worker
+      file:
+        path: ~/.secrets/consul
+        state: directory
+      delegate_to: "127.0.0.1"
+
+    - name: save the key to the ansible worker
+      copy:
+        dest: ~/.secrets/consul/consul-key
+        content: '{{ consul_key.stdout }}'
+      delegate_to: "127.0.0.1"
+
+    - name: create consul CA
+      command: consul tls ca create
+    
+    - name: create a certificate for each server
+      command: '{{ item }}'
+      with_items:
+        - consul tls cert create -server -dc Homelab
+        - consul tls cert create -server -dc Homelab
+        - consul tls cert create -server -dc Homelab
+
+
+    - name: fetch the certificates
+      fetch:
+        src: '{{ item }}'
+        dest: /tmp/ansible
+      with_items:
+        - ~/consul-agent-ca.pem
+        - ~/Homelab-server-consul-0.pem
+        - ~/Homelab-server-consul-0-key.pem
+        - ~/Homelab-server-consul-1.pem
+        - ~/Homelab-server-consul-1-key.pem
+        - ~/Homelab-server-consul-2.pem
+        - ~/Homelab-server-consul-2-key.pem
+    
+    - name: notify that that consul0 is ready
+      copy:
+        content: consul0 ready
+        dest: /tmp/ansible/consul0-ready
+      delegate_to: "127.0.0.1"
+
+- name: set up the consul cluster
+  hosts: all
+  tasks:
+    - name: Copy certificate to the admin instance
+      become: yes
+      copy: 
+        src: '{{ item }}'
+        dest: /etc/consul.d/
+      when: inventory_hostname == 'consul0'
+      with_items:
+        - /tmp/ansible/consul0/home/sibelius/consul-agent-ca.pem
+        - /tmp/ansible/consul0/home/sibelius/Homelab-server-consul-0.pem
+        - /tmp/ansible/consul0/home/sibelius/Homelab-server-consul-0-key.pem
+    - name: wait for consul0 to be ready
+      wait_for:
+        path: /tmp/ansible/consul0-ready
+        search_regex: ^consul0\sready$
+      delegate_to: "127.0.0.1"
+    - name: Copy certificate to first follower
+      become: yes
+      copy: 
+        src: '{{ item }}'
+        dest: /etc/consul.d/
+      when: inventory_hostname == 'consul1'
+      with_items:
+        - /tmp/ansible/consul0/home/sibelius/consul-agent-ca.pem
+        - /tmp/ansible/consul0/home/sibelius/Homelab-server-consul-1.pem
+        - /tmp/ansible/consul0/home/sibelius/Homelab-server-consul-1-key.pem
+
+    - name: copy certificate to the 2nd follower
+      become: yes
+      copy:
+        src: '{{ item }}'
+        dest: /etc/consul.d/
+      when: inventory_hostname == 'consul2'
+      with_items:
+        - /tmp/ansible/consul0/home/sibelius/consul-agent-ca.pem
+        - /tmp/ansible/consul0/home/sibelius/Homelab-server-consul-2.pem
+        - /tmp/ansible/consul0/home/sibelius/Homelab-server-consul-2-key.pem
+
+    - name: store the CA on the ansible worker
+      copy: /tmp/ansible/consul0/home/sibelius/consul-agent-ca.pem
+      dest: ~/.secrets/consul
+      delegate_to: "127.0.0.1"
+
+    - name: Create the consul agent config file
+      become: yes
+      file:
+        path: /etc/consul.d/consul.hcl
+        owner: consul
+        group: consul
+        state: touch
+        mode: 0640
+
+    - name: create the server config file
+      become: yes
+      file:
+        path: /etc/consul.d/server.hcl
+        owner: consul
+        group: consul
+        state: touch
+        mode: 0640
+
+    - name: populate the server config file
+      become: yes
+      blockinfile:
+        path: /etc/consul.d/server.hcl
+        state: present
+        block: |
+          server = true
+          bootstrap_expect = 3
+          client_addr = "0.0.0.0"
+
+    - name: enable ui on admin instance
+      become: yes
+      when: inventory_hostname == 'consul0'
+      lineinfile:
+        path: /etc/consul.d/server.hcl
+        line: ui = true
+
+    - name: fetch consul key
+      command: cat ~/.secrets/consul/consul-key
+      register: consul_key
+      delegate_to: "127.0.0.1"
+      
+    - name: create the systemd config file
+      become: yes
+      copy:
+        dest: /usr/lib/systemd/system/consul.service
+        content: |
+          [Unit]
+          Description="HashiCorp Consul - A service mesh solution"
+          Documentation=https://www.consul.io/
+          Requires=network-online.target
+          After=network-online.target
+          ConditionFileNotEmpty=/etc/consul.d/consul.hcl
+
+          [Service]
+          Type=notify
+          User=consul
+          Group=consul
+          ExecStart=/usr/bin/consul agent -config-dir=/etc/consul.d/
+          ExecReload=/bin/kill --signal HUP $MAINPID
+          KillMode=process
+          KillSignal=SIGTERM
+          Restart=on-failure
+          LimitNOFILE=65536
+
+          [Install]
+          WantedBy=multi-user.target
+    - name: create the agent config for the admin instance
+      become: yes
+      when: inventory_hostname == 'consul0'
+      blockinfile:
+        path: /etc/consul.d/consul.hcl
+        state: present
+        block: |
+          datacenter = "Homelab"
+          data_dir = "/opt/consul"
+          encrypt = "{{ consul_key.stdout }}"
+          ca_file = "/etc/consul.d/consul-agent-ca.pem"
+          cert_file = "/etc/consul.d/Homelab-server-consul-0.pem"
+          key_file = "/etc/consul.d/Homelab-server-consul-0-key.pem"
+          verify_incoming = true
+          verify_outgoing = true
+          verify_server_hostname = true
+          retry_join = ["192.168.1.248"]
+          performance {
+            raft_multiplier = 1
+          }
+          auto_encrypt {
+            allow_tls = true
+          }
+          connect {
+            enabled = true
+          }
+    - name: create the agent config for the first follower
+      become: yes
+      when: inventory_hostname == 'consul1'
+      blockinfile:
+        path: /etc/consul.d/consul.hcl
+        state: present
+        block: |
+          datacenter = "Homelab"
+          data_dir = "/opt/consul"
+          encrypt = "{{ consul_key.stdout }}"
+          ca_file = "/etc/consul.d/consul-agent-ca.pem"
+          cert_file = "/etc/consul.d/Homelab-server-consul-1.pem"
+          key_file = "/etc/consul.d/Homelab-server-consul-1-key.pem"
+          verify_incoming = true
+          verify_outgoing = true
+          verify_server_hostname = true
+          retry_join = ["192.168.1.248","192.168.1.247","192.168.1.246","consul0.lucasquitman.fr","consul1.lucasquitman.fr","consul2.lucasquitman.fr"]
+          performance {
+            raft_multiplier = 1
+          }          
+          auto_encrypt {
+            allow_tls = true
+          }  
+          connect {
+            enabled = true
+          }
+    - name: create the agent config for the second follower
+      become: yes
+      when: inventory_hostname == 'consul2'
+      blockinfile:
+        path: /etc/consul.d/consul.hcl
+        state: present
+        block: |
+          datacenter = "Homelab"
+          data_dir = "/opt/consul"
+          encrypt = "{{ consul_key.stdout }}"
+          ca_file = "/etc/consul.d/consul-agent-ca.pem"
+          cert_file = "/etc/consul.d/Homelab-server-consul-2.pem"
+          key_file = "/etc/consul.d/Homelab-server-consul-2-key.pem"
+          verify_incoming = true
+          verify_outgoing = true
+          verify_server_hostname = true
+          retry_join = ["192.168.1.248","192.168.1.247","192.168.1.246","consul0.lucasquitman.fr","consul1.lucasquitman.fr","consul2.lucasquitman.fr"]
+          performance {
+            raft_multiplier = 1
+          }
+          auto_encrypt {
+            allow_tls = true
+          }
+          connect {
+            enabled = true
+          }
+    - name: enable and start the consul service
+      become: yes
+      systemd:
+        name: consul
+        enabled: yes
+
+    # - name: set up consul environnement variables on the admin instance
+    #   when: inventory_hostname == 'consul0'
+    #   command: |
+    #     export CONSUL_CACERT=/etc/consul.d/consul-agent-ca.pem
+    #     export CONSUL_CLIENT_CERT=/etc/consul.d/Homelab-server-consul-0.pem
+    #     export CONSUL_CLIENT_KEY=/etc/consul.d/Homelab-server-consul-0-key.pem
+
+    # - name: set up consul environnement variables on the first follower
+    #   when: inventory_hostname == 'consul1'
+    #   command: |
+    #     export CONSUL_CACERT=/etc/consul.d/consul-agent-ca.pem
+    #     export CONSUL_CLIENT_CERT=/etc/consul.d/Homelab-server-consul-1.pem
+    #     export CONSUL_CLIENT_KEY=/etc/consul.d/Homelab-server-consul-1-key.pem
+
+    # - name: set up consul environnement variables on the second follower
+    #   when: inventory_hostname == 'consul0'
+    #   command: |
+    #     export CONSUL_CACERT=/etc/consul.d/consul-agent-ca.pem
+    #     export CONSUL_CLIENT_CERT=/etc/consul.d/Homelab-server-consul-2.pem
+    #     export CONSUL_CLIENT_KEY=/etc/consul.d/Homelab-server-consul-2-key.pem

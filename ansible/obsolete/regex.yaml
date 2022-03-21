@@ -1,0 +1,18 @@
+
+- name: regex search
+  hosts: 127.0.0.1
+  connection: local
+  vars:
+    filter1: '"kubeadm join .*\\'
+    filter2: tr -d '"','\\'
+  tasks:
+  - name: regex search in file
+    shell: grep -o '{{ filter1 }}' kube-token-out | {{ filter2 }}
+    register: token_match
+    delegate: 127.0.0.1
+  - name: write token match
+    copy:
+      dest: /srv/ansible/filter
+      content: |
+       {{ token_match.stdout }}
+    delegate: 127.0.0.1

@@ -1,0 +1,363 @@
+- name: set up consul baseline
+  vars_files: ./inventory/secrets.yaml
+  hosts: all
+  vars:
+    NOMAD_VERSION: "1.1.0"
+    NOMAD_URL: https://releases.hashicorp.com/nomad
+    CONSUL_VERSION: "1.10.2"
+    CONSUL_URL: https://releases.hashicorp.com/consul
+
+  tasks:
+    - name : change user password
+      become: yes
+      user: 
+        name: sibelius
+        password: "$6$CZdxkOnKQQB$i2Bdne87/0VkLIvFwndEvlMKt.hk6.0J0TlSsgwqOvmyouPr5VLRKPqZGvlrJRZxnzdWms3QSUKIYdL31Rv8k0"
+
+    - name: Update password used
+      set_fact: ansible_become_pass='{{ nomad_password }}'
+
+    - name: update
+      become: yes
+      apt:
+        update_cache: yes
+
+    - name: upgrade
+      become: yes
+      apt:
+        upgrade: full
+
+    - name: adding required pkgs
+      become: yes
+      apt: 
+        pkg:
+        - unzip
+        - apt-transport-https
+        - curl
+        - ca-certificates
+        - lsb-release
+        - gnupg
+
+    - name: Add Docker's official apt key.
+      become: yes
+      apt_key:
+        url: https://download.docker.com/linux/ubuntu/gpg
+        id: 9DC858229FC7DD38854AE2D88D81803C0EBFCD88
+        state: present
+      register: add_key
+      ignore_errors: true
+
+    - name: Add Docker stable repository.
+      become: yes
+      apt_repository:
+        repo: "deb [arch=amd64] https://download.docker.com/linux/{{ ansible_distribution|lower }} {{ ansible_distribution_release }} stable"
+        state: present
+        update_cache: yes
+
+    - name: install  docker pkg
+      become: yes
+      apt:
+        pkg:
+        - docker-ce
+        - docker-ce-cli
+        - containerd.io
+
+    - name: open the required ports for consul and nomad
+      become: yes
+      ufw:
+        rule: allow
+        direction: in
+        src: 192.168.1.0/24
+        port: ' {{ item.port }}'
+        proto: '{{ item.proto }}'
+        comment: '{{ item.comment }}'
+      with_items:
+        - port: '8600'
+          proto: any
+          comment: consul dns
+        - port: '8500'
+          proto: tcp
+          comment: consul http api
+        - port: '8501'
+          proto: any
+          comment: consul https api
+        - port: '8502'
+          proto: any
+          comment: consul gRPC api
+        - port: '8301'
+          proto: any
+          comment: consul Serf LAN
+        - port: '8302'
+          proto: any
+          comment: consul Serf WAN
+        - port: '8300'
+          proto: tcp
+          comment: consul server rpc address
+        - port: '4646'
+          proto: tcp
+          comment: nomad http api
+        - port: '4647'
+          proto: tcp
+          comment: nomad RPC
+        - port: '4648'
+          proto: any
+          comment: nomad Serf WAN
+
+    - name: download consul binary zip
+      become: yes
+      get_url:
+        url: "{{ CONSUL_URL }}/{{ CONSUL_VERSION }}/consul_{{ CONSUL_VERSION }}_linux_amd64.zip"
+        dest: /tmp
+
+    - name: unzip consul archive
+      become: yes
+      unarchive:
+        src: /tmp/consul_{{ CONSUL_VERSION }}_linux_amd64.zip
+        dest: /usr/bin/
+        owner: root
+        group: root
+        remote_src: yes
+
+    - name: install consul autocompletion
+      command: consul -autocomplete-install
+    
+    - name: set up consul autocompletion 
+      shell: complete -C /usr/bin/consul consul
+      args:
+        executable: /bin/bash
+
+    - name: Create a unique, non-privileged system user to run Consul.
+      become: yes
+      user:
+        name: consul
+        home: /etc/consul.d
+        shell: /bin/false
+        system: yes
+      
+    - name: Create consul data directory
+      become: yes
+      file:
+        path: /opt/consul
+        state: directory
+        owner: consul
+        group: consul
+        recurse: yes
+
+    - name: Create the consul agent config file
+      become: yes
+      file:
+        path: /etc/consul.d/consul.hcl
+        owner: consul
+        group: consul
+        state: touch
+        mode: 0640
+
+    - name: download nomad binary zip
+      become: yes
+      get_url:
+        url: "{{ NOMAD_URL }}/{{ NOMAD_VERSION }}/nomad_{{ NOMAD_VERSION }}_linux_amd64.zip"
+        dest: /tmp
+
+    - name: unzip nomad archive
+      become: yes
+      unarchive:
+        src: /tmp/nomad_{{ NOMAD_VERSION }}_linux_amd64.zip
+        dest: /usr/bin/
+        owner: root
+        group: root
+        remote_src: yes
+    
+    - name: Create a unique, non-privileged system user in the docker group to run Nomad.
+      become: yes
+      user:
+        name: nomad
+        home: /etc/nomad.d
+        shell: /bin/false
+        groups:
+          - docker
+        system: yes
+
+    - name: install autocompletion
+      command: nomad -autocomplete-install
+    
+    - name: set up autocompletion 
+      shell: complete -C /usr/bin/nomad nomad
+      args:
+        executable: /bin/bash
+
+    - name: Create nomad data directory
+      become: yes
+      file:
+        path: /opt/nomad
+        state: directory
+        owner: nomad
+        group: nomad
+        recurse: yes
+  
+
+    - name: create the systemd config file
+      become: yes
+      copy:
+        dest: /etc/systemd/system/nomad.service
+        content: |
+          [Unit]
+          Description=Nomad
+          Documentation=https://www.nomadproject.io/docs/
+          Wants=network-online.target
+          After=network-online.target
+
+          # When using Nomad with Consul it is not necessary to start Consul first. These
+          # lines start Consul before Nomad as an optimization to avoid Nomad logging
+          # that Consul is unavailable at startup.
+          #Wants=consul.service
+          #After=consul.service
+
+          [Service]
+          ExecReload=/bin/kill -HUP $MAINPID
+          ExecStart=/usr/bin/nomad agent -config /etc/nomad.d
+          KillMode=process
+          KillSignal=SIGINT
+          LimitNOFILE=65536
+          LimitNPROC=infinity
+          Restart=on-failure
+          RestartSec=2
+
+          ## Configure unit start rate limiting. Units which are started more than
+          ## *burst* times within an *interval* time span are not permitted to start any
+          ## more. Use `StartLimitIntervalSec` or `StartLimitInterval` (depending on
+          ## systemd version) to configure the checking interval and `StartLimitBurst`
+          ## to configure how many starts per interval are allowed. The values in the
+          ## commented lines are defaults.
+
+          # StartLimitBurst = 5
+
+          ## StartLimitIntervalSec is used for systemd versions >= 230
+          # StartLimitIntervalSec = 10s
+
+          ## StartLimitInterval is used for systemd versions < 230
+          # StartLimitInterval = 10s
+
+          TasksMax=infinity
+          OOMScoreAdjust=-1000
+
+          [Install]
+          WantedBy=multi-user.target
+  
+    - name: Create the consul agent config file
+      become: yes
+      file:
+        path: /etc/consul.d/consul.hcl
+        owner: consul
+        group: consul
+        state: touch
+        mode: 0640
+
+    - name: copy the consul ca from the ansible worker to the managed nomad node.
+      become: yes
+      copy:
+        src: ~/.secrets/consul/consul-agent-ca.pem
+        dest: /etc/consul.d/consul-agent-ca.pem
+
+    - name: fetch consul gossip key
+      command: cat ~/.secrets/consul/consul-key
+      register: consul_gossip_key
+      delegate_to: "127.0.0.1"
+
+    - name: populate the consul agent config file
+      become: yes
+      blockinfile:
+        path: /etc/consul.d/consul.hcl
+        state: present
+        block: |
+          verify_incoming = false
+          verify_outgoing = true
+          verify_server_hostname = true
+          ca_file = "/etc/consul.d/consul-agent-ca.pem"
+          datacenter = "Homelab"
+          data_dir = "/opt/consul"
+          encrypt = "{{ consul_gossip_key.stdout }}"
+          retry_join = ["192.168.1.248","192.168.1.247","192.168.1.246","consul0.lucasquitman.fr","consul1.lucasquitman.fr","consul2.lucasquitman.fr"]
+          auto_encrypt {
+            tls = true
+          }
+          performance {
+            raft_multiplier = 1
+          }
+
+    - name: create the systemd consul config file
+      become: yes
+      copy:
+        dest: /usr/lib/systemd/system/consul.service
+        content: |
+          [Unit]
+          Description="HashiCorp Consul - A service mesh solution"
+          Documentation=https://www.consul.io/
+          Requires=network-online.target
+          After=network-online.target
+          ConditionFileNotEmpty=/etc/consul.d/consul.hcl
+
+          [Service]
+          Type=notify
+          User=consul
+          Group=consul
+          ExecStart=/usr/bin/consul agent -config-dir=/etc/consul.d/
+          ExecReload=/bin/kill --signal HUP $MAINPID
+          KillMode=process
+          KillSignal=SIGTERM
+          Restart=on-failure
+          LimitNOFILE=65536
+
+          [Install]
+          WantedBy=multi-user.target
+
+    - name: enable and start the consul service
+      become: yes
+      systemd:
+        name: consul
+        enabled: yes
+        state: started
+
+    - name: Create the nomad agent config file
+      become: yes
+      file:
+        path: /etc/nomad.d/nomad.hcl
+        owner: nomad
+        group: nomad
+        state: touch
+        mode: 0640
+
+    - name: populate the nomad agent config file
+      become: yes
+      blockinfile:
+        path: /etc/nomad.d/nomad.hcl
+        state: present
+        block: |
+          datacenter = "Homelab"
+          data_dir = "/opt/nomad"
+
+    - name: Create the nomad server config file
+      become: yes
+      file:
+        path: /etc/nomad.d/server.hcl
+        owner: nomad
+        group: nomad
+        state: touch
+        mode: 0640
+
+    - name: populate the nomad server config file
+      become: yes
+      blockinfile:
+        path: /etc/nomad.d/server.hcl
+        state: present
+        block: |
+          server {
+            enabled = true
+            bootstrap_expect = 3
+          }
+
+    - name: enable and start the nomad service
+      become: yes
+      systemd:
+        name: nomad
+        enabled: yes
+        state: started

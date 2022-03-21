@@ -1,0 +1,6 @@
+GLUSTER_MOUNT_ENTRYPOINT: glusterfs-prod-0
+OWNER: root
+GROUP: root
+DIR_MODE: '744'
+MOUNT_DIRNAME: glusterfs
+VOLUME_NAME: gv0

@@ -1,0 +1,15 @@
+- name : Packer glusterfs setup
+  hosts: all
+  vars_files: ../secrets/secrets.yaml
+  roles:
+    - role: common
+      USER_PASSWORD_HASH: $6$8N.Y30t5SMP4Pyqq$7fH9NWmpzCR0T1.kUPYRqf8jcW7l5bTfa02NhcKb708Oqte13UqpPNRUvyIGK.4F8RZrxS6J4oQa3rOUwSAsX1
+      PKG:
+        - software-properties-common
+  tasks:
+    - name: update password used
+      set_fact: ansible_become_pass='{{ glusterfs_password }}'
+
+    - name: install glusterfs
+      include_role:
+        name: glusterfs-server

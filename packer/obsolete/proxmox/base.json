@@ -1,0 +1,73 @@
+{
+    "variables": {
+      "username": "",
+      "password": ""
+  },
+    "builders": [
+      {
+        "type": "proxmox",
+        "proxmox_url": "https://my-proxmox.my-domain:8006/api2/json",
+        "username": "{{user `username`}}",
+        "password": "{{user `password`}}",
+
+
+
+
+
+
+
+
+
+
+
+        "memory": 1024,
+        "name": "ubuntu-srv-golden-img",
+        "iso_urls": ["/srv/kvm/iso/ubuntu-20.04.2-live-server-amd64.iso"],
+        "iso_checksum": "sha256:d1f2bf834bbe9bb43faf16f9be992a6f3935e65be0edece1dee2aa6eb1767423",
+  
+        "http_directory": "subiquity/http",
+        "output_directory": "output/baking/ubuntu-srv",
+        "format": "raw",
+        "vm_name": "golden_ubuntu-srv",
+  
+        "boot_wait": "3s",
+        "boot_command": [
+          "<enter><enter><f6><esc><wait> ",
+          "autoinstall ds=nocloud-net;seedfrom=http://{{ .HTTPIP }}:{{ .HTTPPort }}/",
+          "<enter><wait>"
+        ],
+        "shutdown_command": "echo 'PACKER' | sudo -S shutdown -P now",
+  
+        "ssh_username": "sibelius",
+        "ssh_private_key_file": "/home/sibelius/.ssh/github",
+        "ssh_timeout": "20m",
+        "ssh_handshake_attempts": "120"
+      }
+    ],
+  
+    "provisioners": [
+      {
+        "type": "ansible",
+        "playbook_file": "/srv/ansible/base-image.yaml",
+        "use_proxy": false,
+        "user": "sibelius",
+        "ssh_authorized_key_file": "/home/sibelius/.ssh/github",
+        "extra_arguments": [
+          "--extra-vars",
+          "ansible_become_password='PACKER'"
+        ]
+      }
+    ],
+    "post-processors": [
+      {
+        "type": "shell-local",
+        "inline": [
+          "rm -rf /srv/packer/output/ubuntu-golden/golden-ubuntu-srv",
+          "mv /srv/packer/output/baking/ubuntu-srv/* /srv/packer/output/ubuntu-golden/",
+          "rm -rf /srv/packer/output/baking/ubuntu-srv",
+          "md5sum /srv/packer/output/ubuntu-golden/golden_ubuntu-srv > /srv/packer/output/ubuntu-golden/checksum",
+          "echo $(cat /srv/packer/output/ubuntu-golden/checksum | grep -o .*/srv | tr -d '/srv') > /srv/packer/output/ubuntu-golden/checksum"
+        ]
+      }
+    ]
+  }

@@ -1,0 +1,45 @@
+- name: individualize the vault servers
+  hosts: vault_prod
+  vars_files: ../secrets/secrets.yaml
+  # gather_facts: no
+  tasks:
+
+  # - name: wait for vault to start
+  #   wait_for:
+  #     port: 8200
+  #     state: started
+  #     timeout: 600
+  
+  - name: set become password
+    set_fact: ansible_become_pass='{{ vault_password }}'
+
+  - name: create a  unique node id based on the hostname
+    become: yes
+    copy:
+      mode: 0600
+      dest: /opt/consul/node-id
+      owner: consul
+      group: consul
+      content: '{{ inventory_hostname | to_uuid }}'
+
+  - name: set vault api addr
+    become: yes
+    lineinfile:
+      path: /etc/vault.d/vault.hcl
+      line: '{{ item }}'
+    with_items:
+      - 'api_addr = "http://{{ inventory_hostname }}.node.homelab.consul:8200"'
+      - 'cluster_addr = "https://{{ inventory_hostname }}.node.homelab.consul:8201"'
+
+  - name: restart vault service
+    become: yes
+    systemd:
+      name: vault
+      state: restarted
+  
+  - name: unseal vault
+    include_role:
+      name: unseal-vault
+    vars: 
+      VAULT_ADDR: 'https://{{ inventory_hostname }}.node.homelab.consul:8200'
+  

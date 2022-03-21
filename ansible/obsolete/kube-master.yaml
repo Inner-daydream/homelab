@@ -1,0 +1,286 @@
+#préparation d'un node master kubernetes sur une distrib debian/ubuntu
+
+- name: Set up a master node on ubuntu 
+  vars_files: /srv/ansible/inventory/secrets.yaml
+  hosts: all
+  tasks:
+    - name : change user password
+      become: yes
+      user: 
+        name: sibelius
+        password: "$6$k3n/ugsOpDpg$9XFDOD0tLPI0jl5YcXczWkAlfx9JyB.lnIYwbjqunxxIzHJEB3ym0N/0vOlROPYk4NHKUHY4MwCBdkYqs3Ath/"
+    - name: Update password used
+      set_fact: ansible_become_pass='{{ master_password }}'
+      
+    - name: update
+      become: yes
+      apt:
+        update_cache: yes
+    - name: upgrade
+      become: yes
+      apt:
+        upgrade: full
+    - name: set hostname
+      become: yes
+      hostname:
+        name: "master"
+    - name: add hostname to /etc/hosts
+      become: yes
+      lineinfile:
+        dest: /etc/hosts
+        regexp: '^127\.0\.1\.1'
+        line: '127.0.1.1 master'
+        state: present
+
+    - name: adding pkg needed in order to add k8 & docker sources
+      become: yes
+      apt: 
+        pkg:
+        - apt-transport-https
+        - curl
+        - ca-certificates
+        - lsb-release
+        - gnupg
+    - name: Install helm --classic
+      become: yes
+      snap:
+        name: helm
+        classic: yes
+
+    - name: Add Docker's official apt key.
+      become: yes
+      apt_key:
+        url: https://download.docker.com/linux/ubuntu/gpg
+        id: 9DC858229FC7DD38854AE2D88D81803C0EBFCD88
+        state: present
+      register: add_key
+      ignore_errors: true
+
+    - name: Add Docker stable repository.
+      become: yes
+      apt_repository:
+        repo: "deb [arch=amd64] https://download.docker.com/linux/{{ ansible_distribution|lower }} {{ ansible_distribution_release }} stable"
+        state: present
+        update_cache: yes
+
+    - name: Add an apt signing key for k8
+      become: yes
+      apt_key:
+        url: https://packages.cloud.google.com/apt/doc/apt-key.gpg
+        state: present
+
+    - name: Adding apt repository for k8
+      become: yes
+      apt_repository:
+        repo: deb https://apt.kubernetes.io/ kubernetes-xenial main
+        state: present
+        filename: kubernetes.list
+
+    - name: install k8 and docker pkg
+      become: yes
+      apt:
+        update_cache: yes
+        pkg:
+        - kubelet
+        - kubeadm
+        - kubectl
+        - docker-ce
+        - docker-ce-cli
+        - containerd.io
+
+    - name: pin version of k8 packages
+      become: yes
+      dpkg_selections:
+        name: '{{ item.name }}'
+        selection: hold
+      with_items:
+        - name: kubeadm
+        - name: kubectl
+        - name: kubelet
+
+    - name: Let iptables see bridged traffic
+      become: yes
+      copy:
+        dest: /etc/sysctl.d/k8s.conf
+        content: |
+          net.bridge.bridge-nf-call-ip6tables = 1
+          net.bridge.bridge-nf-call-iptables = 1
+    - name: reload sysctl config
+      command: sysctl --system
+
+    - name: disable swap
+      become: yes
+      command: swapoff -a
+    
+    - name: Disable swap permanently, persist reboots
+      become: yes
+      replace:
+        path: /etc/fstab
+        regexp: '^(\s*)([^#\n]+\s+)(\w+\s+)swap(\s+.*)$'
+        replace: '#\1\2\3swap\4'
+        backup: yes
+
+    - name: Change docker cgroup driver to systemd #k8 cgroup driver need to be the same as docker.
+      become: yes
+      copy:
+        dest: "/etc/docker/daemon.json"
+        content: |
+          {
+            "exec-opts": ["native.cgroupdriver=systemd"]
+          }
+
+    - name: start docker and k8
+      become: yes
+      systemd:
+        name: '{{ item.name }}'
+        state: restarted
+        enabled: yes
+      with_items:
+        - name: docker
+        - name: kubelet
+    - name: restart docker to apply the cgroup change #for some reason the task above wasn't cutting it even with the 'state: restarted', docker was still running the wrong cgroup, manual restart fixes it.
+      become: yes
+      command: systemctl restart docker
+      
+    - name: set up inbound firewall rules
+      become: yes
+      ufw:
+        rule: allow
+        direction: in
+        src: 192.168.1.0/24 #Lan
+        port: ' {{ item.port }}'
+        proto: '{{ item.proto }}'
+        comment: '{{ item.comment }}'
+      with_items:
+        - port: 22
+          proto: 'tcp'
+          comment: in allow ssh
+        - port: 6443
+          proto: 'tcp'
+          comment: kubernetes API server
+        - port: 2379:2380
+          proto: 'tcp'
+          comment: etcd server client API
+        - port: 10250
+          proto: 'tcp'
+          comment: kubelet api
+        - port: 10251
+          proto: 'tcp'
+          comment: kube-scheduler
+        - port: 10252
+          proto: 'tcp'
+          comment: kube-controller-manager
+        - port: 179
+          proto: 'tcp'
+          comment: Calico networking (BGP)
+        - port: 4789
+          proto: 'udp'
+          comment: Calico networking with VXLAN enabled && flannel networking (VXLAN)
+        - port: 2049
+          proto: 'tcp'
+          comment: nfs
+    - name: debugging ssh rule #packer shutdown command not issuing after packer provisioning
+      become: yes
+      ufw:
+        rule: allow
+        port: 22
+        proto: tcp
+        comment: '[DEBUG]'
+
+    - name: enable ufw and set default policy to deny
+      become: yes
+      ufw:
+        state: enabled
+        default: deny
+
+    - name: Add directory for NetworkManager configuration file
+      become: yes
+      file: 
+        path: /etc/NetworkManager/conf.d
+        state: directory
+        mode: '0755'    
+    - name: Add configuration file to prevent NetworkManager from interfering with the interfaces
+      become: yes
+      copy:
+        dest: /etc/NetworkManager/conf.d/calico.conf
+        content: |
+          [keyfile]
+          unmanaged-devices=interface-name:cali*;interface-name:tunl*;interface-name:vxlan.calico
+
+    - name: create kubernete & calico workspace #and install / configure calico
+      become: yes
+      file:
+        path: '{{ item.path }}'
+        state: directory
+        mode: '0755' 
+      with_items:
+        - path: /srv/kubernetes
+        - path: /srv/kubernetes/calico
+        - path: /srv/kubernetes/nfs
+        - path: /srv/kubernetes/monitor
+
+    - name: download calico manifest
+      become: yes
+      uri:
+        dest: /srv/kubernetes/calico/calico.yaml
+        url: https://docs.projectcalico.org/manifests/calico.yaml
+        status_code:
+          - 200
+          - 304
+
+    - name: create the  ~/.kube directory
+      file:
+        path: $HOME/.kube
+        state: directory
+        mode: '0755'
+
+    - name: download calioctl
+      become: yes
+      uri:
+        dest: /usr/bin/calioctl
+        url: https://github.com/projectcalico/calicoctl/releases/download/v3.20.0/calicoctl
+        status_code:
+          - 200
+          - 304
+    - name: set calioctl permissions
+      become: yes
+      file:
+        path: /usr/bin/calioctl
+        mode: a+x
+
+    - name: clone the nfs provisioner repository
+      become: yes
+      git:
+        repo: https://github.com/kubernetes-sigs/nfs-subdir-external-provisioner.git
+        dest: /srv/kubernetes/nfs
+
+    - name: clone the kube-prometheus repository
+      become: yes
+      git:
+        repo: https://github.com/prometheus-operator/kube-prometheus.git
+        dest: /srv/kubernetes/monitor
+    
+    - name: stop the cloud-init unit
+      become: yes
+      systemd:
+        name: cloud-init
+        state: stopped
+    - name: remove some cloud init files to reset state (1/2)
+      become: yes
+      file:
+        path: '{{ item }}'
+        state: absent
+      with_items:
+        - /var/lib/cloud
+        - /run/cloud-init
+    - name: clean cloud-init
+      become: yes
+      command: cloud-init clean
+    - name: remove some cloud init file to reset state (2/2)
+      become: yes
+      file:
+        path: '{{ item }}'
+        state: absent
+      with_items:
+        - /etc/cloud/cloud.cfg.d/subiquity-disable-cloudinit-networking.cfg
+        - /etc/cloud/cloud.cfg.d/99-installer.cfg

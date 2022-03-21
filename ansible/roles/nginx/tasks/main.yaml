@@ -1,0 +1,96 @@
+- name: adding required pkgs
+  become: yes
+  apt: 
+    pkg: 
+      - nginx
+      - unzip
+
+- name: remove the default nginx vhost
+  become: yes
+  file:
+    state: absent
+    path: '{{ item }}'
+  with_items:
+    - /etc/nginx/sites-enabled/default
+    - /etc/nginx/sites-available/default
+
+- name: create the certs directory
+  become: yes
+  file:
+    owner: root
+    group: consul-template
+    path: /etc/nginx/certs
+    mode: 0774
+    state: directory
+
+- name: copy the config file over to nginx
+  become: yes
+  copy:
+    src: nginx-conf/
+    dest: /etc/nginx/sites-available
+
+- name: copy the templates over to consul-template
+  become: yes
+  copy:
+    src: consul-template-templates/
+    dest: /etc/consul-template.d/templates
+
+- name: copy the config file over to consul-template
+  become: yes
+  copy:
+    src: consul-template-conf/
+    dest: /etc/consul-template.d/config
+
+- name: get the file name of all files in /etc/nginx/sites-available
+  find:
+    path: /etc/nginx/sites-available
+  register: find_nginx_files
+  
+- name: create a symbolic link to the config file
+  become: yes
+  file:
+    src: "{{ item.path }}"
+    path: /etc/nginx/sites-enabled/{{ item.path | basename }}
+    state: link
+  with_items:
+    - "{{ find_nginx_files.files }}"
+
+- name: fetch token
+  command: cat ~/.secrets/vault/tokens/nginx-token
+  delegate_to: localhost
+  register: nginx_token
+
+- name: add correct consul template token
+  become: yes
+  lineinfile:
+    path: /etc/consul-template.d/config/consul-template.hcl
+    regexp: '^\s+token\s+=\s+"(TOKEN_REGEX)"'
+    line: '  token = "{{  nginx_token.stdout }}"'
+
+- name: create the vault dir for trusted ca
+  become: yes
+  file:
+    state: directory
+    path: /usr/share/ca-certificates/vault
+
+- name: copy the cert to the trusted ca dir
+  become: yes
+  copy:
+    src: ~/.secrets/ca/vault.crt
+    dest: /usr/share/ca-certificates/vault/vault.crt
+
+- name: update the trusted ca conf file
+  become: yes
+  lineinfile:
+    path: /etc/ca-certificates.conf
+    line: vault/vault.crt
+
+- name: update the trusted ca
+  become: yes
+  command: update-ca-certificates
+
+- name: reload nginx
+  become: yes
+  service:
+    name: nginx
+    state: reloaded

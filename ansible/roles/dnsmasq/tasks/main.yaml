@@ -1,0 +1,40 @@
+- name: adding required pkgs
+  become: yes
+  apt: 
+    pkg: dnsmasq
+
+- name: create the dnsmasq conf file
+  become: yes
+  copy:
+    dest: '/etc/dnsmasq.d/{{ DATACENTER_NAME }}.dns'
+    content: |
+      server=/consul/127.0.0.1#8600
+      rev-server={{ LOCAL_CIDR_RANGE }},127.0.0.1#8600
+      server={{ GLOBAL_DNS_SERVER }}
+
+- name: unbind resolved from port 53
+  become: yes
+  lineinfile: 
+    path: /etc/systemd/resolved.conf
+    line: DNSStubListener=no
+
+- name: restart resolved
+  become: yes
+  systemd:
+    name: systemd-resolved
+    state: restarted
+      
+- name: add the domain controllers 
+  when: ADD_DCS
+  become: yes
+  lineinfile:
+    path: '/etc/dnsmasq.d/{{ DATACENTER_NAME }}.dns'
+    line: erver=/{{ LOCAL_DOMAIN_NAME }}/{{ item }}
+  loop: '{{ LOCAL_DNS_SERVERS }}'
+
+- name: enable & restart dnsmasq
+  become: yes
+  systemd:
+    name: dnsmasq
+    enabled: yes
+    state: restarted

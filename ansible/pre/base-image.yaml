@@ -1,0 +1,30 @@
+- name : base image configuration
+  hosts: all
+  tasks:
+    - name: update
+      become: yes
+      apt:
+        update_cache: yes
+    - name: upgrade
+      become: yes
+      apt:
+        upgrade: full
+    - name: allow ssh
+      become: yes
+      ufw:
+        rule: allow
+        direction: in
+        port: 22
+        proto: tcp
+        comment: allow ssh
+    - name: enable ufw and set default policy to deny
+      become: yes
+      ufw:
+        state: enabled
+        default: deny
+    - name: fix vmware template parsing
+      become: yes
+      command: |
+        rm -rf /etc/issue
+        cp /run/issue /etc/issue
+

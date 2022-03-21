@@ -1,0 +1,96 @@
+- name: master actions
+  gather_facts: no
+  remote_user: sibelius
+  hosts: master
+  vars_files: /srv/ansible/inventory/secrets.yaml
+  tasks:
+
+    - name: set become password for the master node
+      set_fact: ansible_become_pass='{{ master_password }}'
+
+    # - name: start kubeadm
+    #   become: yes
+    #   shell: kubeadm init --pod-network-cidr=172.100.0.0/16 --ignore-preflight-errors=NumCPU --ignore-preflight-errors=Mem
+
+    - name: get the cluster join command 
+      become: yes
+      command: kubeadm token create --print-join-command
+      register: kube_token
+
+    - name: store token on local computer
+      local_action: copy content={{ kube_token.stdout }} dest=/srv/ansible/kube-token    
+
+    - name: copy the admin.conf file to the .kube directory
+      become: yes
+      copy:
+        remote_src: yes
+        src: /etc/kubernetes/admin.conf
+        dest: /home/{{ ansible_user}}/.kube/config
+        owner: '{{ ansible_user }}'
+        group: '{{ ansible_user }}'
+
+    - name: apply calico manifest
+      command: kubectl apply -f /srv/kubernetes/calico/calico.yaml
+
+    - name: install the kubernetes dashboard
+      command: |
+        kubectl apply -f https://raw.githubusercontent.com/kubernetes/dashboard/master/aio/deploy/recommended.yaml
+
+    - name: create dashboard admin service account 'dashboard-admin-sa'
+      command: kubectl create serviceaccount dashboard-admin-sa
+      register: create_result
+      failed_when:
+        - create_result.rc != 0
+        - '"already exists" not in create_result.stderr'
+
+    - name: bind the dashboard-admin-service-account service account to the cluster-admin role
+      command: kubectl create clusterrolebinding dashboard-admin-sa --clusterrole=cluster-admin --serviceaccount=default:dashboard-admin-sa
+      failed_when:
+        - create_result.rc != 0
+        - '"already exists" not in create_result.stderr'  
+
+    
+
+
+    
+- name: minion actions
+  gather_facts: no
+  remote_user: sibelius
+  hosts: minion
+  vars_files: /srv/ansible/inventory/secrets.yaml
+  tasks:
+    - name: get the token
+      local_action: command cat /srv/ansible/kube-token
+      register: kube_token_minion
+
+    - name: update the become pass for the worker nodes
+      set_fact: ansible_become_pass='{{ minion_password }}'
+
+    - name: join the cluster on the worker
+      become: yes
+      command: '{{ kube_token_minion.stdout }}' 
+
+    - name: adding pkg needed for nfs
+      become: yes
+      apt: 
+        pkg:
+        - nfs-common
+
+- name: finalized cluster actions
+  gather_facts: no
+  remote_user: sibelius
+  hosts: master
+  vars_files: /srv/ansible/inventory/secrets.yaml
+  tasks:
+    - name: add the nfs storage provisioner repo
+      command : "helm repo add nfs-subdir-external-provisioner https://kubernetes-sigs.github.io/nfs-subdir-external-provisioner/"
+    - name: install the nfs storage provisioner
+      command: "helm install nfs-subdir-external-provisioner nfs-subdir-external-provisioner/nfs-subdir-external-provisioner  --set nfs.server=192.168.1.40 --set nfs.path=/srv/nfs/k8-vol --set storageClass.provisionerName=k8s-sigs.io/nfs-subdir-external-provisioner"
+    - name: create storage classe
+      command: "kubectl create -f /srv/kubernetes/nfs/deploy/class.yaml"
+    - name: apply the monitoring stack
+      command: '{{ item }}'
+      with_items:
+        - "kubectl create -f /srv/kubernetes/monitoring/manifests/setup -f /srv/kubernetes/monitoring/manifests"
+        - "sleep 20"
+        - "kubectl create -f /srv/kubernetes/monitoring/manifests/setup -f /srv/kubernetes/monitoring/manifests"

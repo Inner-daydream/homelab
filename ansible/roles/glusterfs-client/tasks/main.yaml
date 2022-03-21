@@ -1,0 +1,40 @@
+- name: install the glusterfs client package
+  become: yes
+  apt:
+    name: glusterfs-client
+
+- name: load the fuse linux kernel
+  become: yes
+  command: modprobe fuse
+
+- name: create the glusterfs directory
+  become: yes
+  file:
+    mode: '{{ DIR_MODE }}'
+    path: '/mnt/{{ MOUNT_DIRNAME }}'
+    state: directory
+    owner: '{{ OWNER }}'
+    group: '{{ GROUP }}'
+
+- name: populate /etc/hosts
+  become: yes
+  lineinfile:
+    dest: /etc/hosts
+    regexp: '.*{{ item.hostname }}$'
+    line: "{{ item.ip }} {{ item.hostname }} {{ item.hostname }}.lucasquitman.fr"
+    state: present
+  with_items:
+    - ip: '192.168.1.230'
+      hostname: glusterfs-prod-0
+    - ip: '192.168.1.229'
+      hostname: glusterfs-prod-1
+    - ip: '192.168.1.228'
+      hostname: glusterfs-prod-2
+
+- name: add fstab entry
+  become: yes
+  lineinfile:
+    dest: /etc/fstab
+    regexp: '.*gluster-prod.*'
+    state: present
+    line: "{{ GLUSTER_MOUNT_ENTRYPOINT }}:/{{ VOLUME_NAME }} /mnt/{{ MOUNT_DIRNAME }} glusterfs defaults,_netdev 0 0"

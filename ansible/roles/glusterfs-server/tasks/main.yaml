@@ -1,0 +1,72 @@
+- name: Create a new partition for use as a brick
+  become: yes
+  parted:
+    device: '{{ DEVICE }}'
+    number: '{{ DEVICE_NUMBER }}'
+    state: present
+
+- name: format the brick
+  become: yes
+  filesystem:
+    dev: '{{ DEVICE }}{{ DEVICE_NUMBER }}'
+    fstype: xfs
+    opts: -i size=512
+
+- name: Create the mountpoint
+  become: yes
+  file:
+    path: /data/brick1
+    state: directory
+    recurse: yes
+
+- name: add the mountpoint to the table
+  become: yes
+  lineinfile:
+    path: /etc/fstab
+    line: '{{ DEVICE }}{{ DEVICE_NUMBER }} /data/brick1 xfs defaults 1 2'
+
+- name: mount
+  become: yes
+  shell: mount -a
+
+- name: open the required ports for glusterfs
+  become: yes
+  ufw:
+    rule: allow
+    direction: in
+    src: '{{ LAN_NETWORK }}'
+    port: ' {{ item.port }}'
+    proto: '{{ item.proto }}'
+    comment: '{{ item.comment }}'
+  with_items:
+    - port: '24007'
+      proto: tcp
+      comment: Gluster Daemon
+    - port: '24008'
+      proto: tcp
+      comment: Infiniband management
+    - port: '49152'
+      proto: tcp
+      comment: Brick1
+    - port: '38465'
+      proto: tcp
+      comment: inline Gluster NFS server
+    - port: '38466'
+      proto: tcp
+      comment: inline Gluster NFS server
+    - port: '38467'
+      proto: tcp
+      comment: inline Gluster NFS server
+    - port: '111'
+      proto: any
+      comment: portmapper
+    - port: '2049'
+      proto: any
+      comment: portmapper
+
+- name: Create a glusterfs volume
+  become: yes
+  file:
+    path: /data/brick1/gv0
+    state: directory
+    recurse: yes

@@ -1,0 +1,8 @@
+- name: unseal vault
+  hosts: vault_prod
+  gather_facts: no
+  roles:
+    - role: unseal-vault
+      vars: 
+        VAULT_ADDR: 'https://{{ inventory_hostname }}.node.homelab.consul:8200'
+

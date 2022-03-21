@@ -1,0 +1,41 @@
+- name: vault debug
+  hosts: vault-prod-0
+  tasks:
+    # - name: create a token based on tls-policy
+    #   run_once: yes
+    #   command: vault token create -policy="tls-policy" -period=24h -orphan
+    #   register: tls_policy_token
+    #   environment:
+    #     VAULT_ADDR: https://vault-prod-0.node.homelab.consul:8200
+    #     VAULT_TOKEN: 
+
+    # - name: debug
+    #   debug:
+    #     msg: '{{ tls_policy_token }}'
+    # - name: parse the tls policy token
+    #   run_once: yes
+    #   set_fact: 
+    #     tls_policy_token_parsed: '{{ tls_policy_token.stdout | regex_search("s\.[a-zA-Z0-9]{24}") }}'
+    - name: create a token based on tls-policy
+      run_once: yes
+      command: vault token create -policy="tls-policy" -period=24h -orphan
+      register: tls_policy_token
+      environment:
+        VAULT_ADDR: https://vault-prod-0.node.homelab.consul:8200
+        VAULT_TOKEN: 
+
+    - name: parse the tls policy token
+      run_once: yes
+      set_fact: 
+        tls_policy_token_parsed: '{{ tls_policy_token.stdout | regex_search("s\.[a-zA-Z0-9]{24}") }}'
+
+    - name: debug
+      debug:
+        msg: '{{ tls_policy_token_parsed }}'
+# s\.[a-zA-Z0-9]{24}
+    # - name: store tls policy token token to file on the ansible worker
+    #   run_once: yes
+    #   copy:
+    #     content: "{{ tls_policy_token_parsed }}"
+    #     dest: '{{ VAULT_SECRETS_DIR }}/tokens/tls-policy-token'
+    #   delegate_to: localhost

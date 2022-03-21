@@ -1,0 +1,51 @@
+{
+    "variables": {
+        "password": ""
+    },
+    "sensitive-variables": ["password"],
+    "builders": [
+      {
+        "type": "qemu",
+  
+        "memory": 2048,
+        "name": "vpn",
+        "iso_urls": ["/srv/packer/output/ubuntu-golden/golden_ubuntu-srv"],
+        "iso_checksum": "file:/srv/packer/output/ubuntu-golden/checksum",
+        "output_directory": "output/baking/vpn",
+        "format": "raw",
+        "vm_name": "vpn-base",
+        "shutdown_command": "echo \"{{user `password`}}\" | sudo -S shutdown -P now",
+        "ssh_username": "sibelius",
+        "ssh_private_key_file": "/home/sibelius/.ssh/github",
+        "disk_image": "true",
+        "ssh_timeout": "20m",
+        "ssh_handshake_attempts": "120"
+      }
+    ],
+  
+    "provisioners": [
+      {
+        "type": "ansible",
+        "playbook_file": "/srv/ansible/vpn.yaml",
+        "use_proxy": false,
+        "user": "sibelius",
+        "ssh_authorized_key_file": "/home/sibelius/.ssh/github",
+        "extra_arguments": [
+          "-vvv",
+          "--extra-vars",
+          "ansible_become_password='PACKER'"
+        ]
+      }
+    ],
+    "post-processors": [
+      {
+        "type": "shell-local",
+        "inline": [
+          "rm -rf /srv/packer/output/vpn/vpn-base",
+          "mv /srv/packer/output/baking/vpn/* /srv/packer/output/vpn/",
+          "rm -rf /srv/packer/output/baking/vpn"
+        ]
+      }
+    ]
+  }
+  

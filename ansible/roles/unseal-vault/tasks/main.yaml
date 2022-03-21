@@ -1,0 +1,15 @@
+- name: fetch key shards
+  command: cat {{item}}
+  register: key_shards
+  with_fileglob: '{{ SHARDS_DIR }}/*'
+  delegate_to: localhost
+
+- name: unseal vault
+  command: vault operator unseal {{ item.stdout }}
+  environment:
+    VAULT_ADDR: '{{ VAULT_ADDR }}'
+  with_items: "{{ key_shards.results }}"
+  retries: 20
+  delay: 10
+  register: result
+  until: result.rc == 0

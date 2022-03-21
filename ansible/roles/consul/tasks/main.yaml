@@ -1,0 +1,224 @@
+- name: open the required ports for consul
+  become: yes
+  ufw:
+    rule: allow
+    direction: in
+    src: '{{ LAN_NETWORK }}'
+    port: ' {{ item.port }}'
+    proto: '{{ item.proto }}'
+    comment: '{{ item.comment }}'
+  with_items:
+    - port: '8600'
+      proto: any
+      comment: consul dns
+    - port: '8500'
+      proto: tcp
+      comment: consul http api
+    - port: '8501'
+      proto: any
+      comment: consul https api
+    - port: '8502'
+      proto: any
+      comment: consul gRPC api
+    - port: '8301'
+      proto: any
+      comment: consul Serf LAN
+    - port: '8302'
+      proto: any
+      comment: consul Serf WAN
+    - port: '8300'
+      proto: tcp
+      comment: consul server rpc address
+  
+- name: download consul binary zip
+  become: yes
+  get_url:
+    url: "{{ CONSUL_URL }}/{{ CONSUL_VERSION }}/consul_{{ CONSUL_VERSION }}_linux_amd64.zip"
+    dest: /tmp
+
+- name: unzip consul archive
+  become: yes
+  unarchive:
+    src: /tmp/consul_{{ CONSUL_VERSION }}_linux_amd64.zip
+    dest: /usr/bin/
+    owner: root
+    group: root
+    remote_src: yes
+
+- name: install autocompletion
+  command: consul -autocomplete-install
+
+- name: set up autocompletion 
+  shell: complete -C /usr/bin/consul consul
+  args:
+    executable: /bin/bash
+
+- name: Create a unique, non-privileged system user to run Consul.
+  become: yes
+  user:
+    name: consul
+    home: /etc/consul.d
+    shell: /bin/false
+    system: yes
+  
+- name: Create consul data directory
+  become: yes
+  file:
+    path: /opt/consul
+    state: directory
+    owner: consul
+    group: consul
+    recurse: yes
+
+- name: Create the consul agent config file
+  become: yes
+  file:
+    path: /etc/consul.d/consul.hcl
+    owner: consul
+    group: consul
+    state: touch
+    mode: 0640
+
+- name: create the server config file
+  when: SERVER
+  become: yes
+  file:
+    path: /etc/consul.d/server.hcl
+    owner: consul
+    group: consul
+    state: touch
+    mode: 0640
+
+- name: populate the server config file
+  when: SERVER
+  become: yes
+  blockinfile:
+    path: /etc/consul.d/server.hcl
+    state: present
+    block: |
+      server = true
+      bootstrap_expect = {{ SERVER_COUNT }}
+      client_addr = {{ CLIENT_ADDR }}
+
+- name: enable ui
+  when: UI
+  become: yes
+  lineinfile:
+    path: /etc/consul.d/server.hcl
+    line: ui = true
+  
+- name: check if the gossip key is available 
+  run_once: yes
+  shell: test -e ~/.secrets/consul/consul-key && echo "true" || echo "false"
+  register: key_exists
+  delegate_to: localhost
+
+- name: check if the CA is available
+  run_once: yes
+  shell: test -e ~/.secrets/consul/consul-agent-ca.pem && echo "true" || echo "false"
+  register: ca_exists
+  delegate_to: localhost
+
+- name: fetch the gossip key
+  run_once: yes
+  when: '(key_exists.stdout == "true") and (not SERVER)'
+  command: cat ~/.secrets/consul/consul-key
+  register: gossip_key
+  delegate_to: localhost
+
+- name: create the systemd config file
+  become: yes
+  copy:
+    dest: /usr/lib/systemd/system/consul.service
+    content: |
+      [Unit]
+      Description="HashiCorp Consul - A service mesh solution"
+      Documentation=https://www.consul.io/
+      Requires=network-online.target
+      After=network-online.target
+      ConditionFileNotEmpty=/etc/consul.d/consul.hcl
+
+      [Service]
+      Type=notify
+      User=consul
+      Group=consul
+      ExecStart=/usr/bin/consul agent -config-dir=/etc/consul.d/ -disable-host-node-id=true
+      ExecReload=/bin/kill --signal HUP $MAINPID
+      KillMode=process
+      KillSignal=SIGTERM
+      Restart=on-failure
+      LimitNOFILE=65536
+
+      [Install]
+      WantedBy=multi-user.target
+
+- name: populate the agent config of a server
+  become: yes
+  when: SERVER
+  blockinfile:
+    path: /etc/consul.d/consul.hcl
+    state: present
+    block: |
+      datacenter = "{{ DATACENTER }}"
+      data_dir = "/opt/consul"
+      ca_file = "/etc/consul.d/consul-agent-ca.pem"
+      verify_incoming = true
+      verify_outgoing = true
+      verify_server_hostname = true
+      retry_join = {{ CONSUL_SERVER_LIST }}
+      performance {
+        raft_multiplier = 1
+      }
+      auto_encrypt {
+        allow_tls = true
+      }
+      connect {
+        enabled = true
+      }
+- name: set fact
+  when: not SERVER
+  set_fact: 
+    CONSUL_CLIENT_JOIN: "[{% for host in groups['consul_prod']-%}\"{{ hostvars[host]['ansible_host'] }}\",{% endfor %}]"
+
+- name: populate the agent config of a client
+  become: yes
+  when: not SERVER
+  blockinfile:
+    path: /etc/consul.d/consul.hcl
+    state: present
+    block: |
+      verify_incoming = true
+      verify_outgoing = true
+      verify_server_hostname = true
+      ca_file = "/etc/consul.d/consul-agent-ca.pem"
+      bind_addr = {% raw %}"{{GetInterfaceIP \"ens160\"}}"{% endraw %} 
+      datacenter = "{{ DATACENTER }}"
+      data_dir = "/opt/consul"
+      retry_join = {{ CONSUL_CLIENT_JOIN | replace("'",'"') }}
+      auto_encrypt {
+        tls = true
+      }
+      performance {
+        raft_multiplier = 1
+      }
+      disable_host_node_id = true
+
+- name: add the gossip key to the agent config when it exists
+  when: '(key_exists.stdout == "true") and (not SERVER)'
+  become: yes
+  lineinfile:
+    path: /etc/consul.d/consul.hcl
+    line: 'encrypt = "{{ gossip_key.stdout }}"'
+
+- name: transfer the CA to the consul agent when it exists
+  become: yes
+  when: '(ca_exists.stdout == "true") and (not SERVER)'
+  copy:
+    src: ~/.secrets/consul/consul-agent-ca.pem
+    dest: /etc/consul.d/consul-agent-ca.pem
+
+- name: enable the consul service
+  become: yes
+  systemd:
+    name: consul
+    enabled: yes

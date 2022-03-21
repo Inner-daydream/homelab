@@ -1,0 +1,18 @@
+- name : Packer consul setup
+  hosts: all
+  vars_files: ../secrets/secrets.yaml
+
+  roles:
+    - role: common
+      USER_PASSWORD_HASH: $6$csiKkZjRX$pkS9lr6VSMuenG8tz5JTVpLhtFMSF1TBZfzigR1Vf6UvtWitXXdimbaSh0Bd13R/.0HE9Qt0nSRoBQCuYMXJZ.
+      PKG:
+        - unzip
+  tasks:
+    - name: update password used
+      set_fact: ansible_become_pass='{{ consul_password }}'
+
+    - name: install consul
+      include_role:
+        name: consul
+      vars:
+        SERVER: yes

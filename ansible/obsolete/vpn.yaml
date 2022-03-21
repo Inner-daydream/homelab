@@ -1,0 +1,215 @@
+- name: vpn setup
+  hosts: all
+  vars_files: ~/homelab/data/ansible/inventory/secrets.yaml
+  tasks:
+    - name : change user password
+      become: yes
+      user: 
+        name: sibelius
+        password: "$6$JJ3hYA0y2E$wcXo6l6R1XmyA3J2NVagE1F5Hr7BKZk1gmo5BR55QZYJc/MWkR.0U1w1CTQpRnez2l3I5KPc/F1UWfVDPT2R41"
+
+    - name: Update password used
+      set_fact: ansible_become_pass='{{ vpn_password }}'
+
+    - name: update
+      become: yes
+      apt:
+        update_cache: yes
+
+    - name: upgrade
+      become: yes
+      apt:
+        upgrade: full
+
+    - name: set hostname
+      become: yes
+      hostname:
+        name: "vpn"
+    - name: add hostname to /etc/hosts
+      become: yes
+      lineinfile:
+        dest: /etc/hosts
+        regexp: '^127\.0\.1\.1'
+        line: '127.0.1.1 vpn'
+
+    - name: adding required pkgs
+      become: yes
+      apt: 
+        pkg:
+        - wireguard
+        - nginx
+        - python3-pip
+
+    - name: enable ip forwarding for the current session
+      become: yes
+      command : sysctl net.ipv4.ip_forward=1
+
+    - name: enable persistent ip forwarding
+      become: yes
+      lineinfile:
+        path: /etc/sysctl.conf
+        regexp: '^.net\.ipv4\.ip_forward=1'
+        line: net.ipv4.ip_forward=1
+
+    - name: configure the wireguard tunnel
+      become: yes
+      copy:
+        dest: /etc/wireguard/wg0-client.conf
+        content: |
+          [Interface]
+          Address = 10.200.200.2/24
+          PrivateKey = {{ wireguard_homelab_priv }}
+
+
+          [Peer]
+          PublicKey = AYTfs3cqpQ+X9b/8CNQbK+hCPLrmesmgH6Ru4oxFZzk=
+          Endpoint = 146.59.158.79:37466
+          AllowedIPs = 10.200.200.2/24
+          PersistentKeepalive = 25
+
+    - name: create a systemd unit to create the required iptables rules at boot
+      become: yes
+      copy:
+        dest: /etc/systemd/system/wg-fw.service
+        content: |
+          [Unit]
+          Description=Wireguard iptables boot rules
+
+          [Service]
+          Type=simple
+          ExecStart=/bin/bash -c "iptables -A FORWARD -i wg0-client -j ACCEPT && iptables -t nat -A POSTROUTING -o ens3 -j MASQUERADE"
+
+          [Install]
+          WantedBy=multi-user.target
+    - name: create the nginx reverse proxy config
+      become: yes
+      copy:
+        dest: /etc/nginx/sites-available/reverse-proxy
+        content: |
+          server {
+                  listen 80 proxy_protocol;
+                  access_log /var/log/nginx/reverse-access.log;
+                  error_log /var/log/nginx/reverse-error.log;
+                  server_name lucasquitman.fr;
+                  set_real_ip_from 146.59.158.79;
+                  proxy_set_header X-Real-IP $proxy_protocol_addr;
+                  proxy_set_header X-Forwarded-For $proxy_protocol_addr;
+                  location / {
+                      proxy_pass http://192.168.1.123:80;
+            }
+          }
+    # - name: Ensure that snapd is up to date
+    #   become: yes
+    #   command: snap install core; snap refresh core
+    
+    # - name: install the certbot snap
+    #   become: yes
+    #   snap:
+    #     name: certbot
+    #     classic: yes
+
+    # - name: set up the cerbot symbolic link
+    #   become: yes
+    #   file:
+    #     src: /snap/bin/certbot
+    #     path: /usr/bin/certbot
+    #     state: link
+
+    # - name: create the dns plugin ini file
+    #   become: yes
+    #   copy:
+    #     dest: /root/credentials.ini
+    #     content: |
+    #       dns_godaddy_secret = '{{ dns_secret }}'
+    #       dns_godaddy_key = '{{ dns_api_key }}'
+    
+    # - name: install the godaddy certbot plugin
+    #   become: yes
+    #   command: pip install certbot-dns-godaddy
+
+    # - name: call certbot
+    #   command: certbot --nginx --authenticator dns-godaddy --dns-godaddy-credentials /root/credentials.ini --dns-godaddy-propagation-seconds 900 --agree-tos --redirect  --hsts --staple-ocsp --must-staple -d *.lucasquitman.fr --email '{{ email }}' --server https://acme-v02.api.letsencrypt.org/directory
+
+  
+    - name: start the systemd unit
+      become: yes
+      systemd:
+        name: wg-fw
+        state: started
+        enabled: yes
+
+    - name: delete global ssh rules
+      become: yes
+      ufw:
+        rule: allow
+        direction: in
+        port: 22
+        proto: tcp
+        delete: yes
+
+    - name: allow in rules
+      become: yes
+      ufw:
+        rule: allow
+        direction: in
+        port: '{{ item.port }}'
+        src: '{{ item.src }}'
+        proto: '{{ item.proto }}'
+        comment: '{{ item.comment }}'
+      with_items:
+        - port: 22
+          src: 192.168.1.0/24
+          proto: tcp
+          comment: lan allow ssh
+        - port: 80
+          src: 192.168.1.0/24
+          proto: tcp
+          comment: lan allow http
+        - port: 443
+          src: 192.168.1.0/24
+          proto: tcp
+          comment: lan allow https
+        - port: 80
+          src: "10.200.200.1"
+          proto: tcp
+          comment: tunnel allow http
+        - port: 443
+          src: "10.200.200.1"
+          proto: tcp
+          comment: tunnel allow https
+        
+
+    - name: start the wg0-client interface
+      become: yes
+      command: wg-quick up wg0-client
+
+    - name: enable the wg0 interface on boot
+      become: yes
+      command: systemctl enable wg-quick@wg0-client
+
+    # - name: stop the cloud-init unit
+    #   become: yes
+    #   systemd:
+    #     name: cloud-init
+    #     state: stopped
+    # - name: remove some cloud init files to reset state (1/2)
+    #   become: yes
+    #   file:
+    #     path: '{{ item }}'
+    #     state: absent
+    #   with_items:
+    #     - /var/lib/cloud
+    #     - /run/cloud-init
+
+    # - name: clean cloud-init
+    #   become: yes
+    #   command: cloud-init clean
+
+    # - name: remove some cloud init file to reset state (2/2)
+    #   become: yes
+    #   file:
+    #     path: '{{ item }}'
+    #     state: absent
+    #   with_items:
+    #     - /etc/cloud/cloud.cfg.d/subiquity-disable-cloudinit-networking.cfg
+    #     - /etc/cloud/cloud.cfg.d/99-installer.cfg

@@ -1,0 +1,126 @@
+- name : Packer nomad setup
+  hosts: all
+  vars_files: ../secrets/secrets.yaml
+
+  roles:
+    - role: common
+      USER_PASSWORD_HASH: $6$CZdxkOnKQQB$i2Bdne87/0VkLIvFwndEvlMKt.hk6.0J0TlSsgwqOvmyouPr5VLRKPqZGvlrJRZxnzdWms3QSUKIYdL31Rv8k0
+      PKG:
+      - unzip
+      - apt-transport-https
+      - curl
+      - ca-certificates
+      - lsb-release
+      - gnupg
+      - glusterfs-client
+
+  tasks:
+    - name: find the temporary inventory file
+      run_once: yes
+      find:
+        paths:
+          - '~/gitlab.iscio.com/siocorp/ansible/inventory'
+        patterns:
+          - '^packer-provisioner-ansible\d+'
+        use_regex: yes
+      delegate_to: localhost
+      register: packer_inventory
+        
+    - name: merge the consul inventory with the packer inventory
+      run_once: yes
+      shell:
+        cmd: 'cat consul-inventory.cfg >> {{ packer_inventory["files"][0].path }}'
+        chdir: ~/gitlab.iscio.com/siocorp/ansible/inventory/
+      delegate_to: localhost
+
+    - name: refresh the inventory file
+      run_once: yes
+      meta: refresh_inventory
+
+    - name: update password used
+      set_fact: ansible_become_pass='{{ nomad_password }}'
+      
+    - name: install consul
+      include_role:
+        name: consul
+
+    - name: start the consul service
+      become: yes
+      service:
+        name: consul
+        state: started
+
+    - name: install consul-template
+      include_role: 
+        name: consul-template
+
+    - name: install nomad
+      include_role:
+        name: nomad
+
+    - name: install dnsmasq
+      include_role:
+        name:  dnsmasq
+
+    - name: set up glusterfs client
+      include_role:
+        name: glusterfs-client
+      vars:
+        OWNER: nomad
+        GROUP: nomad
+    
+    - name: enable and start consul template
+      become: yes
+      systemd:
+        name: consul-template
+        enabled: yes
+        state: started
+
+    - name: wait for the certs to be fetched
+      wait_for:
+        timeout: 10
+
+    - name: set up nomad for tls
+      become: yes
+      blockinfile:
+        path: /etc/nomad.d/nomad.hcl
+        state: present
+        marker_begin: "BEGIN4"
+        marker_end: "END4"
+        marker: "# {mark} FOURTH ANSIBLE MANAGED BLOCK"
+        block: |
+          tls {
+            http = true
+            rpc  = true
+            rpc_upgrade_mode = true
+
+            ca_file   = "/opt/nomad/agent-certs/ca.crt"
+            cert_file = "/opt/nomad/agent-certs/agent.crt"
+            key_file  = "/opt/nomad/agent-certs/agent.key"
+
+            verify_server_hostname = true
+            verify_https_client    = true
+          }
+    
+    - name: reload nomad
+      become: yes
+      systemd:
+        name: nomad
+        state: reloaded
+     
+    - name: set the rpc upgrade mode back to false
+      become: yes
+      lineinfile:
+        dest: /etc/nomad.d/nomad.hcl
+        regexp: \s*rpc_upgrade_mode\s*=\s*true
+        line: " rpc_upgrade_mode = false"
+
+    - name: reload nomad
+      become: yes
+      systemd:
+        name: nomad
+        state: reloaded
+        
+    - name: clear the consul data dir
+      become: yes
+      command: rm -rf /opt/consul/*

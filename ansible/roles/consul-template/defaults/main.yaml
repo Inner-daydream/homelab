@@ -1,0 +1,4 @@
+CONSUL_TEMPLATE_VERSION: '0.27.1'
+CONSUL_TEMPLATE_URL: https://releases.hashicorp.com/consul-template
+GROUPS: 
+  - ""

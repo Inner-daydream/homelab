@@ -1,0 +1,129 @@
+- name: open the required ports for vault
+  become: yes
+  ufw:
+    rule: allow
+    direction: in
+    src: '{{ LAN_CIDR }}'
+    port: ' {{ item.port }}'
+    proto: '{{ item.proto }}'
+    comment: '{{ item.comment }}'
+  with_items:
+    - port: '8200'
+      proto: tcp
+      comment: vault apî
+    - port: '8201'
+      proto: tcp
+      comment: vault cluster addr
+
+- name: download vault binary zip
+  become: yes
+  get_url:
+    url: "{{ VAULT_URL }}/{{ VAULT_VERSION }}/vault_{{ VAULT_VERSION }}_linux_amd64.zip"
+    dest: /tmp
+
+- name: unzip vault archive
+  become: yes
+  unarchive:
+    src: /tmp/vault_{{ VAULT_VERSION }}_linux_amd64.zip
+    dest: /usr/bin/
+    owner: root
+    group: root
+    remote_src: yes
+
+- name: give vault the ability to use the mlock syscall without running the process as root. # The mlock syscall prevents memory from being swapped to disk.
+  become: yes
+  command: setcap cap_ipc_lock=+ep /usr/bin/vault
+
+- name: Create a unique, non-privileged system user
+  become: yes
+  user:
+    name: vault
+    home: /etc/vault.d
+    shell: /bin/false
+    system: yes
+
+- name: install autocompletion
+  command: vault -autocomplete-install
+
+- name: set up autocompletion 
+  shell: complete -C /usr/bin/vault vault
+  args:
+    executable: /bin/bash
+
+- name: create the systemd config file
+  become: yes
+  copy:
+    dest: /etc/systemd/system/vault.service
+    content: |
+      [Unit]
+      Description="HashiCorp Vault - A tool for managing secrets"
+      Documentation=https://www.vaultproject.io/docs/
+      Requires=network-online.target
+      After=network-online.target
+      ConditionFileNotEmpty=/etc/vault.d/vault.hcl
+      StartLimitIntervalSec=60
+      StartLimitBurst=3
+
+      [Service]
+      User=vault
+      Group=vault
+      ProtectSystem=full
+      ProtectHome=read-only
+      PrivateTmp=yes
+      PrivateDevices=yes
+      SecureBits=keep-caps
+      AmbientCapabilities=CAP_IPC_LOCK
+      Capabilities=CAP_IPC_LOCK+ep
+      CapabilityBoundingSet=CAP_SYSLOG CAP_IPC_LOCK
+      NoNewPrivileges=yes
+      ExecStart=/usr/bin/vault server -config=/etc/vault.d/vault.hcl
+      ExecReload=/bin/kill --signal HUP $MAINPID
+      KillMode=process
+      KillSignal=SIGINT
+      Restart=on-failure
+      RestartSec=5
+      TimeoutStopSec=30
+      StartLimitInterval=60
+      StartLimitIntervalSec=60
+      StartLimitBurst=3
+      LimitNOFILE=65536
+      LimitMEMLOCK=infinity
+      LogRateLimitIntervalSec=0
+      LogRateLimitBurst=0
+
+      [Install]
+      WantedBy=multi-user.target
+
+- name: Create the vault config file
+  become: yes
+  file:
+    path: /etc/vault.d/vault.hcl
+    owner: vault
+    group: vault
+    state: touch
+    mode: 0640
+
+- name: populate the vault agent config file
+  become: yes
+  blockinfile:
+    path: /etc/vault.d/vault.hcl
+    state: present
+    block: |
+      ui = true
+        listener "tcp" {
+        address          = "0.0.0.0:8200"
+        cluster_address  = "0.0.0.0:8201"
+        tls_disable      = "true"
+      }
+
+      storage "consul" {
+        address = "127.0.0.1:8500"
+        path    = "vault/"
+      }
+
+- name: enable and start the vault service
+  become: yes
+  systemd:
+    name: vault
+    enabled: yes
+    state: started

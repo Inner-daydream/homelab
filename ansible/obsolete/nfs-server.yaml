@@ -1,0 +1,65 @@
+- name: setting up an nfs server for persistent data across our infrastructure.
+  hosts: nfs1
+  tasks:
+    - name: update
+      become: yes
+      apt:
+        update_cache: yes
+
+    - name: upgrade
+      become: yes
+      apt:
+        upgrade: full
+
+    - name: adding required pkg
+      become: yes
+      apt: 
+        pkg:
+        - nfs-kernel-server
+    - name: create the nfs directory structure
+      become: yes
+      file:
+        path: '{{ item.path }}'
+        state: directory
+        mode: '0755' 
+        owner: '{{item.owner}}'
+        group: '{{item.group}}'
+      with_items:
+        - path: /srv/nfs
+          owner: root
+          group: root
+        - path: /srv/nfs/k8-vol
+          owner: nobody
+          group: nogroup
+    - name: export the nfs share by modifying the 'exports' cfg file
+      become: yes
+      blockinfile:
+        path: /etc/exports
+        state: present
+        block: |
+          /var/nfs/k8-vol   192.168.1.21(rw,sync,no_subtree_check,all_squash) 192.168.1.22(rw,sync,no_subtree_check,all_squash) 192.168.1.23(rw,sync,no_subtree_check,all_squash) 192.168.1.24(rw,sync,no_subtree_check,all_squash)
+
+    - name: adjust ufw rules
+      become: yes
+      ufw:
+        rule: allow
+        direction: in
+        src: 192.168.1.0/24 #Lan
+        port: ' {{ item.port }}'
+        proto: '{{ item.proto }}'
+        comment: '{{ item.comment }}'
+      with_items:
+        - port: ssh
+          proto: tcp
+          comment: allow incoming ssh - LAN
+        - port: nfs
+          proto: tcp
+          comment: allow incoming nfs - LAN
+
+    - name: enable ufw and set default policy to deny
+      become: yes
+      ufw:  
+        state: enabled
+        policy: deny
+
+

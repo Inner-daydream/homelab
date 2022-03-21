@@ -1,0 +1,75 @@
+- name : rundeck setup
+  hosts: all
+  vars_files: ./inventory/secrets.yaml
+  tasks:
+
+    - name : change user password
+      become: yes
+      user: 
+        name: sibelius
+        password: '$6$XdPcE.vzbx$dRjLEd.Rcvu2x7bKH7xVZDX8G2ZUR9VgnaOsf3wUe1KC6v/m5Vu96/DvyoiEkE4DmcUog/pk/SrkhEGHKBeEj.'
+
+    - name: Update password used
+      set_fact: ansible_become_pass='{{ rundeck_password }}'
+
+    - name: allow http/s
+      become: yes
+      ufw:
+        rule: allow
+        direction: in
+        port: '{{ item.port }}'
+        proto: '{{ item.proto }}'
+        comment: '{{ item.comment }}'
+      with_items:
+        - port: 4440
+          proto: tcp
+          comment: http
+        - port: 4443
+          proto: tcp
+          comment: https
+
+    - name: adding required pkg
+      become: yes
+      apt: 
+        pkg:
+        - openjdk-11-jre-headless
+
+    - name: add rundeck apt key
+      become: yes
+      apt_key:
+        url: https://packages.rundeck.com/pagerduty/rundeck/gpgkey
+
+    - name: add rundeck repositoriies
+      become: yes
+      apt_repository:
+        repo: '{{ item }}'
+        update_cache: no
+      with_items:
+        - deb https://packages.rundeck.com/pagerduty/rundeckpro/any/ any main
+        - deb-src https://packages.rundeck.com/pagerduty/rundeckpro/any/ any main
+
+    - name: adding required pkg
+      become: yes
+      apt: 
+        pkg:
+        - rundeckpro-enterprise
+
+    - name: update
+      become: yes
+      apt:
+        update_cache: yes
+
+    - name: upgrade
+      become: yes
+      apt:
+        upgrade: full
+
+
+    - name: start the systemd unit
+      become: yes
+      systemd:
+        name: rundeckd
+        state: started
+        enabled: yes
+
+      

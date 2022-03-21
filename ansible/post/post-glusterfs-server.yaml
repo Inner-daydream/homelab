@@ -1,0 +1,81 @@
+- name: set up the glusterfs cluster 
+  hosts: glusterfs_prod
+  vars_files: ../secrets/secrets.yaml
+  vars:
+    REPLICA_COUNT: "3"
+  tasks:
+
+    - name: set become password
+      set_fact: ansible_become_pass='{{ glusterfs_password }}'
+
+    - name: Add IP address of all hosts to all hosts
+      become: yes
+      lineinfile:
+        dest: /etc/hosts
+        regexp: '.*{{ item }}$'
+        line: "{{ hostvars[item].ansible_host }} {{item}} {{item}}.lucasquitman.fr"
+        state: present
+      when: hostvars[item].ansible_host is defined
+      with_items: "{{ groups.glusterfs_prod }}"
+
+    - name: iptable rule required for communication between nodes
+      become: yes
+      command: 'iptables -I INPUT -p all -s "{{ hostvars[item]["ansible_host"] }}" -j ACCEPT'
+      with_items: "{{ groups['glusterfs_prod'] }}"
+
+    - name: install glusterfs
+      become: yes
+      apt:
+        name:
+          - glusterfs-server
+
+    - name: start the glusterd service
+      become: yes
+      service:
+       enabled: yes
+       name: glusterd
+       state: started
+
+    - name: configure the trusted pool
+      become: yes
+      run_once: yes
+      command: 'gluster peer probe {{ hostvars[item]["ansible_host"] }}'
+      with_items: "{{ groups['glusterfs_prod'] }}"
+
+    - name: empty / create and initialize the replica file used to create the command
+      run_once: yes
+      local_action:
+        module: shell
+        _raw_params: 'echo "" > /tmp/glusterfs-replica-cli'
+
+    - name: create the replica command line
+      run_once: yes
+      local_action:
+        module: shell
+        _raw_params: 'echo "{{ hostvars[item]["ansible_host"] }}:/data/brick1/gv0" >> /tmp/glusterfs-replica-cli'
+      with_items: "{{ groups['glusterfs_prod'] }}"
+
+
+    - name: fetch the command line
+      run_once: yes
+      local_action:
+        module: shell
+        _raw_params: 'cat /tmp/glusterfs-replica-cli | tr "\n" " "'
+      register: replica_cli
+
+    - name: set up the gluster volume
+      become: yes
+      run_once: yes
+      command: 'gluster volume create gv0 replica {{ REPLICA_COUNT }} {{ replica_cli.stdout }}'
+    
+    - name: start the gluster volume
+      become: yes
+      run_once: yes
+      command: gluster volume start gv0
+      register: start_output
+
+    - name: display the start info
+      run_once: yes
+      debug:
+        msg: '{{ start_output.stdout }}'
+     

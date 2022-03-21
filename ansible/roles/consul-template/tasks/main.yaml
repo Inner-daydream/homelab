@@ -1,0 +1,64 @@
+- name: download consul binary zip
+  become: yes
+  get_url:
+    url: "{{ CONSUL_TEMPLATE_URL }}/{{ CONSUL_TEMPLATE_VERSION }}/consul-template_{{ CONSUL_TEMPLATE_VERSION }}_linux_amd64.zip"
+    dest: /tmp
+
+- name: unzip consul archive
+  become: yes
+  unarchive:
+    src: /tmp/consul-template_{{ CONSUL_TEMPLATE_VERSION }}_linux_amd64.zip
+    dest: /usr/bin/
+    owner: root
+    group: root
+    remote_src: yes
+
+- name: Create a unique, non-privileged system user
+  become: yes
+  user:
+    name: consul-template
+    home: /etc/consul-template.d
+    shell: /bin/false
+    groups: '{{ GROUPS }}'
+    system: yes
+
+- name: create template directory
+  become: yes
+  file:
+    owner: consul-template
+    group: consul-template
+    path: /etc/consul-template.d/templates
+    state: directory
+
+- name: create config directory
+  become: yes
+  file:
+    owner: consul-template
+    group: consul-template
+    path: /etc/consul-template.d/config
+    state: directory
+
+
+- name: create the systemd config file
+  become: yes
+  copy:
+    dest: /etc/systemd/system/consul-template.service
+    content: |
+      [Unit]
+      Description=consul-template
+      Requires=network-online.target
+      After=network-online.target consul.service vault.service
+
+      [Service]
+      user=consul-template
+      group=consul-template
+      Restart=on-failure
+      ExecStart=/usr/bin/consul-template -config=/etc/consul-template.d/config
+      KillSignal=SIGINT
+      [Install]
+      WantedBy=multi-user.target
+
+- name: enable the consul-template unit
+  become: yes
+  systemd:
+    name: consul-template

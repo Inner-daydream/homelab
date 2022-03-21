@@ -1,0 +1,53 @@
+- name: Read device information
+  become: yes
+  parted: device=/dev/sda unit=MiB
+  register: sda_info
+
+- name: Extend an existing partition to fill all available space
+  become: yes
+  parted:
+    device: /dev/sda
+    number: "{{ sda_info.partitions | length }}"
+    part_end: "100%"
+    resize: yes
+    label: gpt
+    state: present
+
+- name: Extend the physical volume to the maximum available
+  become: yes
+  lvg:
+    vg: ubuntu-vg
+    pvs: /dev/sda3
+    pvresize: yes
+
+- name: Extend the logical volume to take all remaining space of the VG
+  become: yes
+  lvol:
+    resizefs: yes
+    vg: ubuntu-vg
+    lv: ubuntu-lv
+    size: +100%FREE
+
+- name: update
+  become: yes
+  apt:
+    update_cache: yes
+
+- name: upgrade
+  become: yes
+  apt:
+    upgrade: full
+
+- name: adding required pkgs
+  when: PKG is defined
+  become: yes
+  apt: 
+    pkg: '{{ PKG }}'
+
+    
+
+- name : change user password
+  become: yes
+  user: 
+    name: sibelius
+    password: '{{ USER_PASSWORD_HASH }}'

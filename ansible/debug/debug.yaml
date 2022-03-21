@@ -1,0 +1,103 @@
+- name : debug
+  hosts: localhost
+  # vars:
+  #   DOMAIN_CONTROLLERS:
+  #     - '192.168.1.1 dc01.lucasquitman.fr dc01'
+  #     - '192.168.1.2 dc02.lucasquitman.fr dc02'
+  #   REPO_ROOT: ~/gitlab.iscio.com/siocorp
+  tasks:
+    # - name: var setup
+    #   command: "echo ''"
+    #   register: check_result
+
+    # - name: set up vault when consul vault datastore is empty
+    #   when: not ( check_result.stdout | regex_search('^Error!\sNo\skey\sexists\sat:.*') )
+    #   debug:
+    #     msg: PASS
+
+    # - name: debug item
+    #   debug:
+    #     msg: 'this is the dc hostname: {{ item | regex_search("(dc\d+\.\w+\.\w+)") }}'
+    #   loop: '{{ DOMAIN_CONTROLLERS }}'
+
+    # - name: set fact
+    #   set_fact: 
+    #     test: "[{% for host in groups['consul_prod']-%} \"{{ hostvars[host]['ansible_host'] }}\", {% endfor -%}]"
+
+    # - name: debug
+    #   copy:
+    #     dest: /tmp/test123
+    #     content: '{{ test  }}'
+    # - name: get consul server list
+    #   debug:
+    #     msg: '{{ hostvars[item]["ansible_host"] }}'
+    #   with_items: '{{ groups["consul_prod"] }}'
+
+    # - name: find the temporary inventory file
+    #   run_once: yes
+    #   find:
+    #     paths:
+    #       - '~/gitlab.iscio.com/siocorp/ansible/inventory'
+    #     patterns:
+    #       - '^packer-provisioner-ansible\d+'
+    #     use_regex: yes
+    #   register: packer_inventory
+    
+    # - name: debug
+    #   debug:
+    #     msg: '{{ packer_inventory["files"][0].path }}'
+    # - name: set fact
+    #   set_fact: 
+    #     host_debug: "[{% for host in groups['consul_prod']-%}\"{{ hostvars[host]['ansible_host'] }}\",{% endfor %}]"
+       
+
+    # - name: debug
+    #   copy:
+    #     dest: /tmp/test123
+    #     content: "{{ host_debug }}"
+    #     "[{% for host in groups['consul_prod']-%}\"{{ hostvars[host]['ansible_host'] }}\",{%- endfor %}]"
+    
+    #   - name: debug
+    #     debug:
+    #       msg: '{{ inventory_hostname | to_uuid }}'
+
+    # - name: set fact
+    #   command: 'echo -en "this\n is\n a \n token: s.ACKOZ5vDG5SOHWsBZbarv0XU\nand this is not\nend"'
+    #   register: token
+
+    # - name: retrieve token
+    #   set_fact:
+    #     token_parsed: '{{ token.stdout | regex_search("\w\.[a-zA-Z0-9]{24}") }}'
+    # - name: debug
+    #   debug:
+    #     msg: '{{ token_parsed }}'
+
+    # - name : set fact
+    #   set_fact: 
+    #     somevar: |
+    #       {{ '{{' }} this is text {{ '}}' }}
+    #       {{ '{{' }} this is some more text {{ '}}' }}
+
+    # - name: debug
+    #   copy:
+    #     dest: /tmp/test
+    #     content: '{{ somevar }}'
+
+    - name: populate the agent config of a client
+      blockinfile:
+        path: /tmp/consul.hcl
+        state: present
+        block: |
+          verify_incoming = true
+          verify_outgoing = true
+          verify_server_hostname = true
+          ca_file = "/etc/consul.d/consul-agent-ca.pem"
+          bind_addr = {% raw %}"{{GetInterfaceIP \"ens160\"}}"{% endraw %} 
+          data_dir = "/opt/consul"
+          auto_encrypt {
+            tls = true
+          }
+          performance {
+            raft_multiplier = 1
+          }
+          disable_host_node_id = true
