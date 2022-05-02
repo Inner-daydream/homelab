@@ -4,6 +4,23 @@
     pkg: 
       - nginx
       - unzip
+      
+- name: open the required ports for nginx
+  become: yes
+  ufw:
+    rule: allow
+    direction: in
+    src: 192.168.1.0/24
+    port: ' {{ item.port }}'
+    proto: '{{ item.proto }}'
+    comment: '{{ item.comment }}'
+  with_items:
+    - port: '80'
+      proto: tcp
+      comment: http
+    - port: '443'
+      proto: tcp
+      comment: https
 
 - name: remove the default nginx vhost
   become: yes
@@ -56,7 +73,7 @@
     - "{{ find_nginx_files.files }}"
 
 - name: fetch token
-  command: cat ~/.secrets/vault/tokens/nginx-token
+  command: cat ~/.secrets/vault/tokens/root-token
   delegate_to: localhost
   register: nginx_token
 
@@ -88,9 +105,3 @@
 - name: update the trusted ca
   become: yes
   command: update-ca-certificates
-
-- name: reload nginx
-  become: yes
-  service:
-    name: nginx
-    state: reloaded

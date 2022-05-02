@@ -14,7 +14,7 @@
       run_once: yes
       find:
         paths:
-          - '~/gitlab.iscio.com/siocorp/ansible/inventory'
+          - '~/Tech/siocorp/ansible/inventory'
         patterns:
           - '^packer-provisioner-ansible\d+'
         use_regex: yes
@@ -25,7 +25,7 @@
       run_once: yes
       shell:
         cmd: 'cat consul-inventory.cfg >> {{ packer_inventory["files"][0].path }}'
-        chdir: ~/gitlab.iscio.com/siocorp/ansible/inventory/
+        chdir: ~/Tech/siocorp/ansible/inventory/
       delegate_to: localhost
 
     - name: refresh the inventory file

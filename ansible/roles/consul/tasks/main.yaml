@@ -98,7 +98,7 @@
     block: |
       server = true
       bootstrap_expect = {{ SERVER_COUNT }}
-      client_addr = {{ CLIENT_ADDR }}
+      client_addr = "{{ CLIENT_ADDR }}"
 
 - name: enable ui
   when: UI

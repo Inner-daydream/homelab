@@ -14,15 +14,9 @@ autoinstall:
   ssh:
     install-server: yes
     authorized-keys: ["ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQCtMr7/rtE4HDCSXzjuGDJxVJ6iV3kEqb4A59vFa6cPdmx6iGNlmG7R0v3GgaaSMAZB/Ony7GcwmHLi/S15Vhgvm7BbfXdcit1RrqlKQpRCfNdrcg0c3aEv1ZZp50xQuTi8K9WjJC64v/CRQKJsDOxrqKiEfPgcS6DHter4QAZyc0wHm33y/UBKivBee2X6fglJEhNv5DQ26SWv5DMZLMobvFt+U4gCua9cfmLjNLYJGp5VD3uR3Hc/Y+FinuaNOmTczkmIR7jv2sbaG7LaASvZqq7mwPq4NOpG52vaBnAEr5UrTDGGPng5OC2ywjnIfeLEIez5AE2SzclRoHYMTUI6b5bmpkGIkQ3rRHtHzzYaUNfV45O0LUEDc4PskdagqOrGEvoVqIt0UtcTbwIYTW/e9S40o5ojLgelnM9AJ5xwrYHzMigl2V1x4VVQYtdvtWiw13ytv6BQnPqkxAT1H7atyAnVmP5Y7iUyl17leWzgc1brDcfBH+gbuBRu9SaJBcM= ubuntu@LTP-ADM-LQU"]
-  network:
-    network:
-      version: 2
-      ethernets:
-        ens160:
-          dhcp4: true
-          dhcp-identifier: mac
   packages:
     - open-vm-tools
+  early-commands: 
+    - sudo systemctl stop ssh
   late-commands:
-    - sed -i 's/^#*\(send dhcp-client-identifier\).*$/\1 = hardware;/' /target/etc/dhcp/dhclient.conf
     - 'sed -i "s/dhcp4: true/&\n      dhcp-identifier: mac/" /target/etc/netplan/00-installer-config.yaml'

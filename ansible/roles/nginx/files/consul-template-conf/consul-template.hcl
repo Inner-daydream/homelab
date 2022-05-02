@@ -1,8 +1,8 @@
 vault {
-  address      = "http://active.vault.service.consul:8200"
+  address      = "https://active.vault.service.consul:8200"
   token        = "TOKEN_REGEX"
   unwrap_token = false
-  renew_token  = true
+  renew_token  = false
 }
 syslog {
   enabled  = true
@@ -35,6 +35,12 @@ template {
 template {
   source      = "/etc/consul-template.d/templates/nomad_client.ca.tpl"
   destination = "/etc/nginx/certs/nomad_client.ca"
+  perms       = 0700
+  command     = "systemctl reload nginx"
+}
+template {
+  source      = "/etc/consul-template.d/templates/auto-proxy.tpl"
+  destination = "/etc/nginx/sites-enabled/auto-proxy.conf"
   perms       = 0700
   command     = "systemctl reload nginx"
 }

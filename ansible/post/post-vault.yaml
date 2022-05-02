@@ -1,14 +1,14 @@
 - name: individualize the vault servers
   hosts: vault_prod
   vars_files: ../secrets/secrets.yaml
-  # gather_facts: no
+  gather_facts: no
   tasks:
 
-  # - name: wait for vault to start
-  #   wait_for:
-  #     port: 8200
-  #     state: started
-  #     timeout: 600
+  - name: wait for vault to start
+    wait_for:
+      port: 8200
+      state: started
+      timeout: 600
   
   - name: set become password
     set_fact: ansible_become_pass='{{ vault_password }}'

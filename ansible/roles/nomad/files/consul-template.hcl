@@ -20,7 +20,7 @@ vault {
   # Template will automatically renew the token at half the lease duration of
   # the token. The default value is true, but this option can be disabled if
   # you want to renew the Vault token using an out-of-band process.
-  renew_token  = true
+  renew_token  = false
 }
 
 # This block defines the configuration for connecting to a syslog server for

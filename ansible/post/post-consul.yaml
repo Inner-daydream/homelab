@@ -7,13 +7,13 @@
   tasks:
   - name: remove the consul secrets on the worker
     run_once: yes
-    command: rm -rf ~/.secrets/consul
+    command: rm -rf ~/secrets/consul
     delegate_to: localhost
 
   - name: Create local secrets directory for consul on the worker
     run_once: yes
     file:
-      path: ~/.secrets/consul
+      path: ~/secrets/consul
       state: directory
     delegate_to: localhost
 
@@ -35,21 +35,21 @@
   - name: store the gossip key
     run_once: yes
     copy:
-      dest: ~/.secrets/consul/consul-key
+      dest: ~/secrets/consul/consul-key
       content: '{{ gossip_key.stdout }}'
     delegate_to: localhost
 
   - name: generate consul CA
     run_once: yes
     command:
-      chdir: ~/.secrets/consul
+      chdir: ~/secrets/consul
       cmd: consul tls ca create
     delegate_to: localhost
 
   - name: generate consul certs
     run_once: yes
     command:
-      chdir: ~/.secrets/consul
+      chdir: ~/secrets/consul
       cmd: consul tls cert create -server -dc Homelab
     with_sequence: count='{{ COUNT }}'
     delegate_to: localhost
@@ -64,9 +64,9 @@
       src: '{{ item }}'
       dest: /etc/consul.d/
     with_items:
-      - "~/.secrets/consul/consul-agent-ca.pem"
-      - "~/.secrets/consul/Homelab-server-consul-{{ index }}.pem"
-      - "~/.secrets/consul/Homelab-server-consul-{{ index }}-key.pem"
+      - "~/secrets/consul/consul-agent-ca.pem"
+      - "~/secrets/consul/Homelab-server-consul-{{ index }}.pem"
+      - "~/secrets/consul/Homelab-server-consul-{{ index }}-key.pem"
 
   - name: add the certs to the config file
     become: yes

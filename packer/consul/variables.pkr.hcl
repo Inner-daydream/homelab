@@ -11,7 +11,7 @@ variable "ssh_password" {
   default = "PACKER"
 }
 variable "cluster" {
-  default = "Main"
+  default = "main"
 }
 variable "shutdown_password" {
   default = ""

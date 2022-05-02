@@ -40,6 +40,9 @@
     - port: '4648'
       proto: any
       comment: nomad Serf WAN
+    - port: '20000:32000'
+      proto: tcp
+      comment: "nomad dynamic port range (allocated to containers randomly)"
 
 - name: download nomad binary zip
   become: yes
@@ -82,6 +85,14 @@
     owner: nomad
     group: nomad
     recurse: yes
+    mode: 0771
+  
+- name: add consul-template user to the nomad group
+  user:
+    name: consul-template
+    groups: 
+      - nomad
+  become: yes
 
 - name: create the systemd config file
   become: yes
@@ -184,6 +195,14 @@
           path      = "{{ PERSISTENT_STORAGE_PATH }}"
           read_only = false
         }
+        enabled = true
+      }
+      plugin "docker" {
+        config {
+          volumes {
+            enabled = true
+          }
+        }
       }
     
 - name: add the agent certificate template
@@ -230,19 +249,19 @@
   become: yes
   copy:
     src: consul-template.hcl
-    dest: /etc/consul-template.d/templates/consul-template.hcl
+    dest: /etc/consul-template.d/config/consul-template.hcl
     group: consul-template
     owner: consul-template
   
 - name: fetch token
-  command: cat ~/.secrets/vault/tokens/tls-policy-token
+  command: cat ~/.secrets/vault/tokens/root-token
   delegate_to: localhost
   register: tls_policy_token
 
 - name: add correct consul template token
   become: yes
   lineinfile:
-    path: /etc/consul-template.d/templates/consul-template.hcl
+    path: /etc/consul-template.d/config/consul-template.hcl
     regexp: '^\s+token\s+=\s+"(TOKEN_REGEX)"'
     line: '  token = "{{  tls_policy_token.stdout }}"'
 

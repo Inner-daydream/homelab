@@ -1,15 +1,8 @@
 - name: individualize the nomad servers
   hosts: nomad_prod
   vars_files: ../secrets/secrets.yaml
-  # gather_facts: no
+  gather_facts: no
   tasks:
-
-  # - name: wait for vault to start
-  #   wait_for:
-  #     port: 8200
-  #     state: started
-  #     timeout: 600
-  
   - name: set become password
     set_fact: ansible_become_pass='{{ nomad_password }}'
 
@@ -20,6 +13,15 @@
       dest: /opt/consul/node-id
       owner: consul
       group: consul
+      content: '{{ inventory_hostname | to_uuid }}'
+
+  - name: create a  unique nomad client id based on the hostname
+    become: yes
+    copy:
+      mode: 0600
+      dest: /opt/nomad/client/client-id
+      owner: nomad
+      group: nomad
       content: '{{ inventory_hostname | to_uuid }}'
 
   - name: restart consul & nomad service

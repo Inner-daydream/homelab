@@ -5,7 +5,7 @@ source "vsphere-iso" "base-ubuntu" {
   boot_command = [
     "<enter><enter><f6><esc><wait>",
     "autoinstall ds=nocloud-net",
-    "<enter><wait>"
+    "<enter><wait600>"
   ]
 
   cd_files               = ["../subiquity/http/meta-data", "../subiquity/http/user-data"]
@@ -13,7 +13,7 @@ source "vsphere-iso" "base-ubuntu" {
   guest_os_type          = "ubuntu64Guest"
   cluster                = var.cluster
   datastore              = "SDS1"
-  iso_paths              = ["[SDS1] 00-ISO/ubuntu2004ls.iso"]
+  iso_paths              = ["[SDS1] 00-ISO/ubuntu-20.04.4-live-server-amd64.iso"]
   vm_name                = "base-ubuntu"
   shutdown_command       = "echo 'PACKER' | sudo -S shutdown -P now"
   username               = var.Vusername
@@ -35,7 +35,7 @@ source "vsphere-iso" "base-ubuntu" {
   }
 
   storage {
-    disk_size = 4000
+    disk_size             = 4000
     disk_thin_provisioned = true
   }
 }

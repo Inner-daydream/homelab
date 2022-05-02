@@ -131,14 +131,14 @@
 
 - name: create a role named nomad-cluster which allows subdomains
   run_once: yes
-  command: vault write pki_int/roles/nomad-cluster allowed_domains=global.nomad allow_subdomains=true max_ttl=86400s require_cn=false generate_lease=true
+  command: vault write pki_int/roles/nomad-cluster allowed_domains=global.nomad allow_subdomains=true max_ttl=8766h require_cn=false generate_lease=true
   environment:
     VAULT_ADDR: http://127.0.0.1:8200
     VAULT_TOKEN: '{{ root_token.stdout }}'
 
 - name: create a role named lucasquitman-dot-fr which allows subdomains
   run_once: yes
-  command: vault write pki_int/roles/lucasquitman-dot-fr allowed_domains="lucasquitman.fr" allow_subdomains=true max_ttl=86400s  generate_lease=true
+  command: vault write pki_int/roles/lucasquitman-dot-fr allowed_domains="lucasquitman.fr" allow_subdomains=true max_ttl=8766h  generate_lease=true
   environment:
     VAULT_ADDR: http://127.0.0.1:8200
     VAULT_TOKEN: '{{ root_token.stdout }}'
